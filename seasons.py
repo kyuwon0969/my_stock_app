@@ -7,82 +7,90 @@ from datetime import datetime
 # 1. 페이지 설정
 st.set_page_config(page_title="사계절 전략 계산기", page_icon="🌿", layout="wide")
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=300) # 데이터 갱신 주기를 5분으로 단축
 def fetch_data():
-    # 데이터 수집 (충분한 계산을 위해 3개월치로 확장)
+    # 데이터 수집 (충분한 계산을 위해 3개월치)
     qqq = yf.download("QQQ", period="3mo", progress=False)
     soxl = yf.download("SOXL", period="3mo", progress=False)
     
-    if len(qqq) < 15 or len(soxl) < 2:
-        return None, None, None
+    if len(qqq) < 20 or len(soxl) < 5:
+        return None, None, None, None
+
+    # --- 실시간 장중 데이터 처리 로직 ---
+    # yfinance는 장중일 때 마지막 행에 실시간 데이터를 넣습니다. 
+    # 사계절 전략은 '확정된 전일 종가'가 필요하므로, 마지막 데이터가 오늘 날짜면 제외합니다.
+    today_date = datetime.now().strftime('%Y-%m-%d')
+    
+    # SOXL 처리
+    if soxl.index[-1].strftime('%Y-%m-%d') == today_date:
+        # 오늘 데이터가 포함되어 있다면 그 전 데이터들을 사용
+        soxl_p1 = float(soxl['Close'].iloc[-2]) # 어제 확정 종가
+        soxl_p2 = float(soxl['Close'].iloc[-3]) # 그저께 확정 종가
+        current_price = float(soxl['Close'].iloc[-1]) # 현재 움직이는 가격
+    else:
+        # 아직 오늘 장이 안 열렸거나 데이터가 안 들어왔다면
+        soxl_p1 = float(soxl['Close'].iloc[-1])
+        soxl_p2 = float(soxl['Close'].iloc[-2])
+        current_price = soxl_p1
 
     # --- QQQ RSI(14) 계산 ---
-    close_qqq = qqq['Close']
+    # RSI 계산 시에도 장중 데이터는 제외하고 확정 데이터로만 계산
+    qqq_final = qqq.iloc[:-1] if qqq.index[-1].strftime('%Y-%m-%d') == today_date else qqq
+    
+    close_qqq = qqq_final['Close']
     delta = close_qqq.diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
     
-    # 0으로 나누기 방지
     rs = gain / loss.replace(0, np.nan)
     rsi_series = 100 - (100 / (1 + rs))
-    
-    # NaN 값 제외하고 가장 최근 유효 데이터 추출
     last_rsi = float(rsi_series.dropna().iloc[-1])
     
-    # SOXL 종가 데이터 (가장 최근 확정된 2일치)
-    soxl_closes = soxl['Close'].dropna()
-    soxl_p1 = float(soxl_closes.iloc[-1]) # 어제 종가
-    soxl_p2 = float(soxl_closes.iloc[-2]) # 그저께 종가
-    
-    return last_rsi, soxl_p1, soxl_p2
+    return last_rsi, soxl_p1, soxl_p2, current_price
 
 # --- UI 구성 ---
 st.title("🌿 사계절 전략(Ivy-Willow-Lily) 대시보드")
-st.markdown(f"**최종 업데이트:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+st.markdown(f"**조회 시간:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} (KST)")
 
 try:
-    with st.spinner('실시간 시장 데이터를 분석 중입니다...'):
-        rsi, p1, p2 = fetch_data()
+    with st.spinner('데이터를 정밀 분석 중입니다...'):
+        rsi, p1, p2, live = fetch_data()
 
     if rsi is None:
-        st.error("데이터를 충분히 불러오지 못했습니다. 시장 데이터가 아직 업데이트 중일 수 있습니다.")
+        st.error("데이터 로드 실패")
     else:
         # --- 로직 계산 ---
         x = np.ceil(((p1 + p2) * 1.01 / 1.99) * 100) / 100
         
-        # 친구가 준 RSI 기준 적용 (필요시 65/30 등으로 조정 가능)
         if rsi > 65:
-            mode, color, desc = "Ivy (강세)", "red", "상승 에너지가 강합니다. 공격적 매도 목표."
-            buy_p = x - 0.01
-            sell_p = np.ceil((x * 1.03) * 100) / 100
+            mode, color = "Ivy (강세)", "red"
+            buy_p, sell_p = x - 0.01, np.ceil((x * 1.03) * 100) / 100
         elif rsi > 45:
-            mode, color, desc = "Willow (정상)", "orange", "안정적인 흐름입니다. 평단가 근처 매매."
-            buy_p = x - 0.01
-            sell_p = x
+            mode, color = "Willow (정상)", "orange"
+            buy_p, sell_p = x - 0.01, x
         else:
-            mode, color, desc = "Lily (하락/조정)", "blue", "하락 압력이 높습니다. 보수적 매수 목표."
-            buy_p = np.floor((x * 0.975) * 100) / 100
-            sell_p = x
+            mode, color = "Lily (하락)", "blue"
+            buy_p, sell_p = np.floor((x * 0.975) * 100) / 100, x
 
-        # --- 결과 표시 ---
+        # --- 대시보드 표시 ---
         st.divider()
         st.markdown(f"### 현재 시장 모드: :{color}[{mode}]")
-        st.info(desc)
-
-        c1, c2, c3 = st.columns(3)
-        c1.metric("QQQ RSI (14일)", f"{rsi:.2f}")
-        c2.metric("SOXL 어제 종가 (p1)", f"${p1:.2f}")
-        c3.metric("SOXL 그저께 종가 (p2)", f"${p2:.2f}")
+        
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("QQQ RSI", f"{rsi:.2f}")
+        m2.metric("어제 종가 (p1)", f"${p1:.2f}")
+        m3.metric("그저께 종가 (p2)", f"${p2:.2f}")
+        m4.metric("SOXL 현재가", f"${live:.2f}", delta=f"{live-p1:.2f}")
 
         st.divider()
-        st.subheader("🎯 오늘의 주문 가이드 (LOC)")
+        st.subheader("🎯 오늘의 LOC 주문 가이드")
         col_buy, col_sell = st.columns(2)
-        
         with col_buy:
-            st.success(f"**매수 주문가:** `${buy_p:.2f}` 이하")
+            st.success(f"**매수 지정가:** `${buy_p:.2f}`")
         with col_sell:
-            st.error(f"**매도 주문가:** `${sell_p:.2f}` 이상")
+            st.error(f"**매도 지정가:** `${sell_p:.2f}`")
+        
+        st.caption(f"※ 현재 미국 장중인 경우 'SOXL 현재가'는 실시간이며, 주문가는 어제/그저께 확정 종가 기반입니다.")
 
 except Exception as e:
-    st.error(f"데이터 처리 중 오류 발생: {e}")
-    st.warning("미국 시장 휴장일이거나 데이터 업데이트 시간(오전 9시~10시 사이)일 수 있습니다.")
+    st.error(f"오류 발생: {e}")
