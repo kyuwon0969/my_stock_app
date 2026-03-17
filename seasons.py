@@ -13,8 +13,6 @@ localS = LocalStorage()
 # --- 데이터 수집 함수 ---
 @st.cache_data(ttl=3600)
 def get_backtest_data(start_date, end_date):
-    """백테스트를 위한 과거 데이터 수집 및 지표 계산"""
-    # RSI 계산 예열을 위해 시작일 6개월 전부터 수집
     fetch_start = pd.to_datetime(start_date) - pd.DateOffset(months=6)
     data = yf.download(["SOXL", "QQQ"], start=fetch_start, end=end_date, progress=False)
     if data.empty: return None
@@ -31,7 +29,6 @@ def get_backtest_data(start_date, end_date):
     df['prev_close'] = df['close'].shift(1)
     df['prev_close2'] = df['close'].shift(2)
     
-    # Wilder's RSI 계산
     delta = qqq.diff()
     gain = delta.where(delta > 0, 0)
     loss = -delta.where(delta < 0, 0)
@@ -44,7 +41,6 @@ def get_backtest_data(start_date, end_date):
 
 @st.cache_data(ttl=300)
 def fetch_live_data():
-    """실시간 타점 계산용 데이터"""
     data = yf.download(["SOXL", "QQQ"], period="6mo", progress=False)
     if data.empty or len(data) < 20: return None
     
@@ -82,12 +78,12 @@ with tab1:
         user_name = st.text_input("사용자 이름", value="규원")
         storage_key = f"seasons_data_{user_name}"
         saved_data = localS.getItem(storage_key) or {"seed": 10000.0, "profit": 0.0, "slot": 0}
-        init_seed = st.number_input("초기 시드 (USD)", value=float(saved_data['seed']))
-        current_profit = st.number_input("누적 수익금 (USD)", value=float(saved_data['profit']))
-        current_slot = st.slider("현재 매수 완료 회차", 0, 5, int(saved_data['slot']))
-        if st.button("💾 데이터 저장"):
+        init_seed = st.sidebar.number_input("초기 시드 (USD)", value=float(saved_data['seed']))
+        current_profit = st.sidebar.number_input("누적 수익금 (USD)", value=float(saved_data['profit']))
+        current_slot = st.sidebar.slider("현재 매수 완료 회차", 0, 5, int(saved_data['slot']))
+        if st.sidebar.button("💾 데이터 저장"):
             localS.setItem(storage_key, {"seed": init_seed, "profit": current_profit, "slot": current_slot})
-            st.success("저장 완료!")
+            st.sidebar.success("저장 완료!")
 
     res = fetch_live_data()
     if res:
@@ -133,8 +129,8 @@ with tab2:
     if st.button("🚀 백테스트 실행"):
         df_back = get_backtest_data(b_start.strftime('%Y-%m-%d'), b_end.strftime('%Y-%m-%d'))
         if df_back is not None:
-            # 변수 초기화
             cash, shares, used_slots = b_seed, 0, 0
+            slot_cash = 0  # 한 사이클의 1회분 고정 매수 금액
             history = []
             
             for date, row in df_back.iterrows():
@@ -142,38 +138,42 @@ with tab2:
                 x_raw = (p_prev1 + p_prev2) * 1.01 / 1.99
                 willow_x = np.ceil(x_raw * 100) / 100
                 
-                # 타점 결정
+                # 모드 판정
                 if rsi_val > 65: b_limit, s_limit = willow_x - 0.01, np.ceil((willow_x * 1.03) * 100) / 100
                 elif rsi_val > 45: b_limit, s_limit = willow_x - 0.01, willow_x
                 elif rsi_val > 30: b_limit, s_limit = np.floor((willow_x * 0.975) * 100) / 100, willow_x
                 else: b_limit, s_limit = np.floor((willow_x * 0.975) * 100) / 100, willow_x
 
-                # 매도 로직
+                # 1. 매도 로직 (전량 매도 후 다음 사이클 준비)
                 sold_today = False
                 if shares > 0 and curr_close >= s_limit:
                     cash += (shares * curr_close)
-                    shares, used_slots, sold_today = 0, 0, True
+                    shares, used_slots = 0, 0
+                    slot_cash = 0  # 사이클 종료로 슬롯 금액 초기화
+                    sold_today = True
                 
-                # 매수 로직 (5분할)
+                # 2. 매수 로직 (고정 슬롯 금액 적용)
                 if not sold_today and used_slots < 5 and curr_close <= b_limit:
-                    one_slot_cash = (cash + (shares * curr_close)) / (5 - used_slots)
-                    buy_qty = one_slot_cash // b_limit
-                    if cash >= (buy_qty * curr_close):
+                    # 최초 진입 시점에만 1회분 매수 금액(slot_cash)을 확정함
+                    if used_slots == 0:
+                        slot_cash = cash / 5
+                    
+                    if cash >= (slot_cash):
+                        buy_qty = slot_cash // curr_close
                         shares += buy_qty
                         cash -= (buy_qty * curr_close)
                         used_slots += 1
                 
                 history.append({'Date': date, 'Total': cash + (shares * curr_close)})
             
-            # 결과 처리
+            # 성과 지표 계산
             res_df = pd.DataFrame(history).set_index('Date')
             final_val = res_df['Total'].iloc[-1]
             total_ret = (final_val / b_seed - 1) * 100
-            years = (res_df.index[-1] - res_df.index[0]).days / 365.25
-            cagr = ((final_val / b_seed) ** (1 / years) - 1) * 100
+            days = (res_df.index[-1] - res_df.index[0]).days
+            cagr = ((final_val / b_seed) ** (365.25 / days) - 1) * 100
             mdd = (res_df['Total'] / res_df['Total'].cummax() - 1).min() * 100
 
-            # 메트릭 출력
             st.divider()
             m1, m2, m3, m4 = st.columns(4)
             m1.metric("최종 자산", f"${final_val:,.2f}")
@@ -181,16 +181,16 @@ with tab2:
             m3.metric("CAGR", f"{cagr:.2f}%")
             m4.metric("최대 낙폭(MDD)", f"{mdd:.2f}%")
 
-            # 연도별 수익률 요약
             res_df['year'] = res_df.index.year
+            prev_val = b_seed
             yearly_summary = []
             for yr in res_df['year'].unique():
                 y_df = res_df[res_df['year'] == yr]
-                y_start = y_df['Total'].iloc[0]
                 y_end = y_df['Total'].iloc[-1]
-                y_ret = (y_end / y_start - 1) * 100
+                y_ret = (y_end / prev_val - 1) * 100
                 y_mdd = (y_df['Total'] / y_df['Total'].cummax() - 1).min() * 100
                 yearly_summary.append({'연도': yr, '수익률': f"{y_ret:.2f}%", 'MDD': f"{y_mdd:.2f}%"})
+                prev_val = y_end
             
             st.subheader("📅 연도별 성과 요약")
             st.table(pd.DataFrame(yearly_summary))
