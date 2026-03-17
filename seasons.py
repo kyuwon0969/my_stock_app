@@ -1,112 +1,128 @@
-import streamlit as st
 import yfinance as yf
 import pandas as pd
 import numpy as np
-from datetime import datetime
+import matplotlib.pyplot as plt
+from matplotlib.ticker import StrMethodFormatter
 
-# 1. 페이지 설정
-st.set_page_config(page_title="사계절 전략 대시보드", page_icon="🌿", layout="wide")
-
-@st.cache_data(ttl=300)
-def fetch_data():
-    # 데이터 수집 (Wilder RSI와 p2 계산을 위해 6개월치)
-    data = yf.download(["SOXL", "QQQ"], period="6mo", progress=False)
-    
-    if data.empty:
-        return None
-    
-    # 데이터 정리 (멀티인덱스 대응)
-    if isinstance(data.columns, pd.MultiIndex):
-        soxl = data['Close']['SOXL'].dropna()
-        qqq = data['Close']['QQQ'].dropna()
-    else:
-        soxl = data['SOXL'].dropna()
-        qqq = data['QQQ'].dropna()
-
-    today_date = datetime.now().strftime('%Y-%m-%d')
-    
-    # 장중 데이터 처리 (오늘 데이터가 있으면 제외하고 p1, p2 확정)
-    if soxl.index[-1].strftime('%Y-%m-%d') == today_date:
-        p_live = float(soxl.iloc[-1])
-        p1 = float(soxl.iloc[-2])
-        p2 = float(soxl.iloc[-3])
-        qqq_for_rsi = qqq.iloc[:-1] # RSI는 확정된 데이터로만
-    else:
-        p_live = float(soxl.iloc[-1])
-        p1 = float(soxl.iloc[-1])
-        p2 = float(soxl.iloc[-2])
-        qqq_for_rsi = qqq
-
-    # QQQ RSI 14 계산 (백테스트 코드와 동일한 SMA 방식 유지)
-    delta = qqq_for_rsi.diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-    rsi_series = 100 - (100 / (1 + (gain / loss)))
-    last_rsi = float(rsi_series.iloc[-1])
-    
-    return last_rsi, p1, p2, p_live
-
-# --- UI 구성 ---
-st.title("🌿 사계절 최적화 전략 (Ivy-Willow-Lily-Tulip)")
-st.markdown(f"**조회 시간:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} (KST)")
-
-try:
-    with st.spinner('최적화된 타점을 계산 중입니다...'):
-        result = fetch_data()
-
-    if result is None:
-        st.error("데이터를 불러오지 못했습니다.")
-    else:
-        rsi, p1, p2, live = result
+class FourSeasons_Wilder_Backtester:
+    def __init__(self, start_date, end_date, initial_seed=10000):
+        self.start_date = start_date
+        self.end_date = end_date
+        self.initial_seed = initial_seed
         
-        # 1. 기초 x값 계산 (백테스트 로직)
-        x_raw = (p1 + p2) * 1.01 / 1.99
-        willow_x = np.ceil(x_raw * 100) / 100
+        # 운영 변수 (5분할 균등 매수)
+        self.cash = initial_seed
+        self.shares = 0
+        self.used_slots = 0
+        self.num_slots = 5
+        self.slot_cash = initial_seed / 5
         
-        # 2. 모드 결정 및 타점 적용
-        if rsi > 65:
-            mode, color = "Ivy (강세)", "red"
-            buy_limit = willow_x - 0.01
-            sell_limit = np.ceil((willow_x * 1.03) * 100) / 100 # +3.0%
-        elif rsi > 45:
-            mode, color = "Willow (정상)", "orange"
-            buy_limit = willow_x - 0.01
-            sell_limit = willow_x # +0.0%
-        elif rsi > 30:
-            mode, color = "Lily (하락)", "blue"
-            buy_limit = np.floor((willow_x * 0.975) * 100) / 100 # -2.5%
-            sell_limit = willow_x
-        else:
-            mode, color = "Tulip (과매도)", "purple"
-            buy_limit = np.floor((willow_x * 0.975) * 100) / 100 # -2.5%
-            sell_limit = willow_x # +0.0%
+        self.history = []
 
-        # --- 메트릭 표시 ---
-        st.divider()
-        st.markdown(f"### 현재 시장 모드: :{color}[{mode}]")
-        
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("QQQ RSI", f"{rsi:.2f}")
-        c2.metric("어제 종가 (p1)", f"${p1:.2f}")
-        c3.metric("그저께 종가 (p2)", f"${p2:.2f}")
-        c4.metric("SOXL 현재가", f"${live:.2f}", delta=f"{live-p1:.2f}")
-
-        # --- 주문 가이드 섹션 ---
-        st.divider()
-        st.subheader("🎯 오늘의 최적화 LOC 주문 가이드")
-        
-        st.info(f"**기준 x값 (Willow_x):** `${willow_x:.2f}`")
-        
-        col_buy, col_sell = st.columns(2)
-        with col_buy:
-            st.success("### 📥 매수 (Buy LOC)")
-            st.write(f"**주문 가격:** `${buy_limit:.2f}` 이하")
-            st.caption("※ 5분할 매수 전략 중 1회분 진입 권장")
+    def fetch_data(self):
+        print(f"📡 데이터 수집 및 Wilder RSI 계산 중...")
+        try:
+            # Wilder 방식은 과거 데이터 예열이 중요하므로 6개월 전부터 수집
+            fetch_start = pd.to_datetime(self.start_date) - pd.DateOffset(months=6)
+            data = yf.download(["SOXL", "QQQ"], start=fetch_start, end=self.end_date)
             
-        with col_sell:
-            st.error("### 📤 매도 (Sell LOC)")
-            st.write(f"**주문 가격:** `${sell_limit:.2f}` 이상")
-            st.caption(f"※ 전량 매도 (수익 목표: {((sell_limit/willow_x)-1)*100:+.1f}%)")
+            if isinstance(data.columns, pd.MultiIndex):
+                soxl_all = data['Close']['SOXL'].dropna()
+                qqq_all = data['Close']['QQQ'].dropna()
+            else:
+                soxl_all = data['SOXL'].dropna()
+                qqq_all = data['QQQ'].dropna()
 
-except Exception as e:
-    st.error(f"오류가 발생했습니다: {e}")
+            # --- 트레이딩뷰 방식(Wilder's Smoothing) RSI 계산 ---
+            delta = qqq_all.diff()
+            gain = delta.where(delta > 0, 0)
+            loss = -delta.where(delta < 0, 0)
+            
+            # alpha = 1/14 설정이 Wilder 방식의 핵심
+            avg_gain = gain.ewm(alpha=1/14, min_periods=14, adjust=False).mean()
+            avg_loss = loss.ewm(alpha=1/14, min_periods=14, adjust=False).mean()
+            
+            rs = avg_gain / avg_loss.replace(0, np.nan)
+            full_rsi = 100 - (100 / (1 + rs))
+            
+            # 시작일 이후 데이터로 필터링
+            self.soxl_data = soxl_all[soxl_all.index >= self.start_date]
+            self.rsi = full_rsi[full_rsi.index >= self.start_date]
+            return self.soxl_data
+        except Exception as e:
+            print(f"❌ 데이터 오류: {e}")
+            return None
+
+    def run(self):
+        df = self.soxl_data
+        rsi = self.rsi
+        
+        for i in range(2, len(df)):
+            p_prev1 = float(df.iloc[i-1])
+            p_prev2 = float(df.iloc[i-2])
+            curr_close = float(df.iloc[i])
+            date = df.index[i]
+            rsi_val = rsi.iloc[i-1] # 어제 확정 RSI 사용
+            
+            # 1. Willow_x 계산
+            x_raw = (p_prev1 + p_prev2) * 1.01 / 1.99
+            willow_x = np.ceil(x_raw * 100) / 100
+            
+            # 2. 사계절 모드별 타점 (친구의 최적화 로직 적용)
+            if rsi_val > 65: # Ivy
+                buy_limit = willow_x - 0.01
+                sell_limit = np.ceil((willow_x * 1.03) * 100) / 100
+            elif rsi_val > 45: # Willow
+                buy_limit = willow_x - 0.01
+                sell_limit = willow_x
+            elif rsi_val > 30: # Lily
+                buy_limit = np.floor((willow_x * 0.975) * 100) / 100
+                sell_limit = willow_x
+            else: # Tulip
+                buy_limit = np.floor((willow_x * 0.975) * 100) / 100
+                sell_limit = willow_x
+
+            sold_today = False
+            # 3. 매도 체크
+            if self.shares > 0 and curr_close >= sell_limit:
+                self.cash += self.shares * curr_close
+                self.shares, self.used_slots = 0, 0
+                self.slot_cash = self.cash / self.num_slots
+                sold_today = True
+            
+            # 4. 매수 체크 (LOC 체결 시뮬레이션)
+            if not sold_today and self.used_slots < self.num_slots and curr_close <= buy_limit:
+                order_qty = self.slot_cash // buy_limit
+                self.shares += order_qty
+                self.cash -= (order_qty * curr_close)
+                self.used_slots += 1
+            
+            self.history.append({'Date': date, 'Total': self.cash + (self.shares * curr_close)})
+
+        self.results = pd.DataFrame(self.history).set_index('Date')
+        self.report()
+
+    def report(self):
+        df = self.results
+        final_val = df['Total'].iloc[-1]
+        years = (df.index[-1] - df.index[0]).days / 365.25
+        
+        cagr = ((final_val / self.initial_seed) ** (1 / years) - 1) * 100
+        mdd = (df['Total'] / df['Total'].cummax() - 1).min() * 100
+
+        print(f"\n✨ [Wilder RSI 적용 결과] ✨")
+        print(f"🏆 최종 자산: ${final_val:,.2f}")
+        print(f"🚀 CAGR: {cagr:.2f}% | 📉 MDD: {mdd:.2f}%")
+        
+        # 그래프 출력
+        plt.figure(figsize=(12, 6))
+        plt.plot(df['Total'], color='darkgreen', label='Wilder Four Seasons')
+        plt.gca().yaxis.set_major_formatter(StrMethodFormatter('{x:,.0f}'))
+        plt.title("Performance with Wilder's RSI Smoothing")
+        plt.grid(True, alpha=0.3)
+        plt.show()
+
+if __name__ == "__main__":
+    tester = FourSeasons_Wilder_Backtester("2016-01-01", "2026-03-17")
+    if tester.fetch_data() is not None:
+        tester.run()
