@@ -15,6 +15,7 @@ localS = LocalStorage()
 def get_processed_data(ticker, start_date):
     try:
         fetch_start = pd.to_datetime(start_date) - pd.DateOffset(months=6)
+        # 종목과 QQQ 데이터를 함께 수집
         data = yf.download([ticker, "QQQ"], start=fetch_start, progress=False)
         
         if data.empty: return None
@@ -32,6 +33,7 @@ def get_processed_data(ticker, start_date):
         df['prev_close'] = df['close'].shift(1)
         df['prev_close2'] = df['close'].shift(2)
         
+        # QQQ 기반 Wilder's RSI 계산
         delta = qqq_close.diff()
         gain = delta.where(delta > 0, 0).ewm(alpha=1/14, adjust=False).mean()
         loss = -delta.where(delta < 0, 0).ewm(alpha=1/14, adjust=False).mean()
@@ -56,6 +58,7 @@ def run_simulation(df, initial_seed, num_slots):
         x_raw = (p_prev1 + p_prev2) * 1.01 / 1.99
         willow_x = np.ceil(x_raw * 100) / 100
         
+        # RSI 기반 모드 판정 및 타점 설정
         if rsi_val > 65: b_limit, s_limit = willow_x - 0.01, np.ceil((willow_x * 1.03) * 100) / 100
         elif rsi_val > 45: b_limit, s_limit = willow_x - 0.01, willow_x
         elif rsi_val > 30: b_limit, s_limit = np.floor((willow_x * 0.975) * 100) / 100, willow_x
@@ -91,14 +94,13 @@ def run_simulation(df, initial_seed, num_slots):
 # --- UI 레이아웃 ---
 with st.sidebar:
     st.header("⚙️ 전략 및 운용 설정")
-    target_ticker = st.selectbox("대상 종목 선택", ["SOXL", "USD", "QLD"], index=0)
+    # TQQQ를 다시 리스트에 추가
+    target_ticker = st.selectbox("대상 종목 선택", ["SOXL", "USD", "TQQQ"], index=0)
     
     config_key = f"seasons_config_{target_ticker}"
     saved_config = localS.getItem(config_key) or {"op_start": "2024-01-01", "init_seed": 10000.0, "num_slots": 5}
     
-    # 슬롯 분할 수를 다시 3, 4, 5, 6으로 고정
-    num_slots = st.select_slider("매수 슬롯 분할 수(5분할 추천)", options=[3, 4, 5, 6], value=int(saved_config.get('num_slots', 5)))
-    
+    num_slots = st.select_slider("매수 슬롯 분할 수", options=[3, 4, 5, 6], value=int(saved_config.get('num_slots', 5)))
     op_start = st.date_input("실제 운용 시작일", value=pd.to_datetime(saved_config['op_start']))
     init_seed = st.number_input("투자 원금 (USD)", value=float(saved_config['init_seed']), step=1000.0)
     
@@ -108,7 +110,7 @@ with st.sidebar:
             "init_seed": init_seed,
             "num_slots": num_slots
         })
-        st.success(f"저장 완료 (분할: {num_slots}회)")
+        st.success(f"{target_ticker} 설정 저장 완료!")
     
     if st.button("🔄 강제 새로고침"):
         st.cache_data.clear()
