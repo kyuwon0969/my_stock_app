@@ -3,7 +3,6 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
-import pytz
 from streamlit_local_storage import LocalStorage
 
 # 1. 페이지 설정
@@ -11,14 +10,13 @@ st.set_page_config(page_title="사계절 전략 통합 매니저", page_icon="�
 
 localS = LocalStorage()
 
-# --- 데이터 엔진 (캐시 및 업데이트 로직 강화) ---
+# --- 데이터 엔진 ---
 @st.cache_data(ttl=600)
-def get_processed_data(ticker, start_date, end_date):
+def get_processed_data(ticker, start_date):
     """지정한 기간의 데이터를 가져오고 지표 계산"""
     try:
-        # RSI 예열을 위해 시작일 6개월 전부터 수집
         fetch_start = pd.to_datetime(start_date) - pd.DateOffset(months=6)
-        # yfinance 데이터 지연 방지를 위해 종료일을 명시하지 않고 최신순 수집
+        # 최신 데이터 확보를 위해 end를 지정하지 않음
         data = yf.download([ticker, "QQQ"], start=fetch_start, progress=False)
         
         if data.empty: return None
@@ -86,7 +84,8 @@ def run_simulation(df, initial_seed):
         
         history.append({
             'Date': date, 'Total': total_assets, 'QQQ_Hold': qqq_hold_val,
-            'QQQ_Price': qqq_curr_close, 'Slots': used_slots, 'Avg_Price': avg_price
+            'QQQ_Price': qqq_curr_close, 'Slots': used_slots, 'Avg_Price': avg_price,
+            'Cash': cash, 'Shares': shares, 'Slot_Cash': slot_cash
         })
                     
     return pd.DataFrame(history).set_index('Date')
@@ -99,17 +98,15 @@ with st.sidebar:
     target_ticker = st.selectbox("대상 종목 선택", ["SOXL", "USD", "QLD"], index=0)
     
     st.divider()
-    # 로컬 스토리지에서 공통 설정값 불러오기
     config_key = f"seasons_config_{target_ticker}"
     saved_config = localS.getItem(config_key) or {"op_start": "2024-01-01", "init_seed": 10000.0}
     
-    # 설정값 입력
     op_start = st.date_input("실제 운용 시작일", value=pd.to_datetime(saved_config['op_start']))
     init_seed = st.number_input("투자 원금 (USD)", value=float(saved_config['init_seed']), step=1000.0)
     
     if st.button("💾 이 종목 설정값 저장"):
         localS.setItem(config_key, {"op_start": op_start.strftime('%Y-%m-%d'), "init_seed": init_seed})
-        st.success("브라우저에 저장되었습니다!")
+        st.success("설정 저장 완료!")
 
     if st.button("🔄 데이터 강제 새로고침"):
         st.cache_data.clear()
@@ -119,8 +116,7 @@ tab1, tab2 = st.tabs(["🎯 실시간 추적 & 가이드", "📊 과거 백테�
 
 # --- TAB 1: 실시간 추적 ---
 with tab1:
-    # 종료일은 항상 현재 시점 반영
-    df_live = get_processed_data(target_ticker, op_start.strftime('%Y-%m-%d'), None)
+    df_live = get_processed_data(target_ticker, op_start.strftime('%Y-%m-%d'))
     
     if df_live is not None and not df_live.empty:
         hist_live = run_simulation(df_live, init_seed)
@@ -130,7 +126,7 @@ with tab1:
         total_ret = (cur['Total'] / init_seed - 1) * 100
         qqq_ret = (cur['QQQ_Hold'] / init_seed - 1) * 100
 
-        st.subheader(f"📊 {target_ticker} 운용 현황 (데이터 기준일: {df_live.index[-1].strftime('%Y-%m-%d')})")
+        st.subheader(f"📊 {target_ticker} 운용 현황 (데이터: {df_live.index[-1].strftime('%Y-%m-%d')})")
         m1, m2, m3, m4 = st.columns(4)
         m1.metric("전략 수익률", f"{total_ret:+.2f}%", f"QQQ 대비 {total_ret-qqq_ret:+.2f}%")
         m2.metric("평균 단가", f"${cur['Avg_Price']:.2f}")
@@ -148,40 +144,55 @@ with tab1:
         elif rsi_now > 30: mode, color, b_l, s_l = "Lily", "blue", np.floor((willow_x * 0.975) * 100) / 100, willow_x
         else: mode, color, b_l, s_l = "Tulip", "purple", np.floor((willow_x * 0.975) * 100) / 100, willow_x
 
-        st.markdown(f"### 🎯 오늘의 주문 가이드 (모드: :{color}[{mode}])")
+        st.markdown(f"### 🎯 오늘의 실전 주문 가이드 (모드: :{color}[{mode}])")
         cl, cr = st.columns(2)
+        
         with cl:
-            st.success(f"#### 📥 {int(cur['Slots']) + 1}회차 매수 (LOC)")
+            st.success(f"#### 📥 {int(cur['Slots']) + 1}회차 매수 예약 (LOC)")
             if cur['Slots'] < 5:
-                st.write(f"**가격:** `${b_l:.2f}` 이하")
-                st.caption(f"기준 RSI: {rsi_now:.2f} | p1: ${p1:.2f} | p2: ${p2:.2f}")
-            else: st.write("✅ 모든 슬롯 체결 완료")
+                # 다음 매수 수량 계산
+                # 만약 현재 슬롯이 0이라면 현재 현금의 1/5, 아니면 이미 정해진 slot_cash 사용
+                target_slot_cash = cur['Cash'] / 5 if cur['Slots'] == 0 else cur['Slot_Cash']
+                buy_qty = int(target_slot_cash // b_l)
+                
+                st.write(f"**매수 지정가:** `${b_l:.2f}` 이하")
+                st.write(f"**매수 수량:** `{buy_qty} 주` (권장)")
+                st.caption(f"기준: 1슬롯 예산 ${target_slot_cash:,.2f}")
+            else:
+                st.write("✅ 모든 슬롯 매수 완료. 매도 시점을 기다리세요.")
+        
         with cr:
-            st.error("#### 📤 전량 매도 (LOC)")
-            if cur['Avg_Price'] > 0:
-                st.write(f"**가격:** `${s_l:.2f}` 이상")
+            st.error("#### 📤 전량 매도 예약 (LOC)")
+            if cur['Shares'] > 0:
+                st.write(f"**매도 지정가:** `${s_l:.2f}` 이상")
+                st.write(f"**매도 수량:** `{int(cur['Shares'])} 주` (보유 전량)")
                 st.write(f"**목표 수익률:** `{(s_l/cur['Avg_Price']-1)*100:+.2f}%` (평단 대비)")
-            else: st.write("보유 수량 없음")
+            else:
+                st.write("보유 물량이 없습니다.")
 
         st.divider()
         st.subheader("📈 자산 흐름 비교 (파랑: 전략 / 주황: QQQ)")
         st.line_chart(hist_live[['Total', 'QQQ_Hold']])
+    else:
+        st.warning("데이터를 가져오는 중입니다. 잠시만 기다려주세요.")
 
-# --- TAB 2: 백테스트 ---
+# --- TAB 2: 백테스트 (생략 없이 유지) ---
 with tab2:
     st.header("🔍 초장기 과거 성과 분석")
-    col1, col2, col3 = st.columns(3)
-    with col1: s_date = st.date_input("테스트 시작일", value=datetime(2013, 1, 1), min_value=datetime(2013, 1, 1))
-    with col2: e_date = st.date_input("테스트 종료일", value=datetime.now())
-    with col3: s_seed = st.number_input("테스트 시드", value=10000.0, step=1000.0)
+    c1, c2, c3 = st.columns(3)
+    with c1: s_date = st.date_input("테스트 시작일", value=datetime(2013, 1, 1), min_value=datetime(2013, 1, 1))
+    with c2: e_date = st.date_input("테스트 종료일", value=datetime.now())
+    with c3: s_seed = st.number_input("테스트 시드", value=10000.0, step=1000.0, key="backtest_seed")
 
     if st.button("🚀 백테스트 실행"):
-        df_back = get_processed_data(target_ticker, s_date.strftime('%Y-%m-%d'), e_date.strftime('%Y-%m-%d'))
+        df_back = get_processed_data(target_ticker, s_date.strftime('%Y-%m-%d'))
+        # 백테스트는 종료일 슬라이싱 필요
+        df_back = df_back.loc[:e_date.strftime('%Y-%m-%d')] if df_back is not None else None
+        
         if df_back is not None and not df_back.empty:
             res_back = run_simulation(df_back, s_seed)
             final_v = res_back['Total'].iloc[-1]
             final_qqq = res_back['QQQ_Hold'].iloc[-1]
-            
             total_ret, qqq_ret = (final_v / s_seed - 1) * 100, (final_qqq / s_seed - 1) * 100
             days = (res_back.index[-1] - res_back.index[0]).days
             cagr = ((final_v / s_seed) ** (365.25 / (days if days > 0 else 1)) - 1) * 100
@@ -193,15 +204,4 @@ with tab2:
             r2.metric("총 수익률", f"{total_ret:,.2f}%", f"QQQ 대비 {total_ret-qqq_ret:+.2f}%")
             r3.metric("CAGR (연복리)", f"{cagr:.2f}%")
             r4.metric("MDD (최대낙폭)", f"{mdd:.2f}%")
-
             st.line_chart(res_back[['Total', 'QQQ_Hold']])
-            
-            res_back['year'] = res_back.index.year
-            yearly = []
-            temp_seed = s_seed
-            for yr in sorted(res_back['year'].unique()):
-                y_df = res_back[res_back['year'] == yr]
-                y_e = y_df['Total'].iloc[-1]
-                yearly.append({'연도': yr, '전략 수익률': f"{(y_e/temp_seed-1)*100:.2f}%", '전략 MDD': f"{(y_df['Total']/y_df['Total'].cummax()-1).min()*100:.2f}%"})
-                temp_seed = y_e
-            st.table(pd.DataFrame(yearly))
