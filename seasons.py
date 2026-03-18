@@ -2,7 +2,7 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import numpy as np
-from datetime import datetime, timedelta
+from datetime import datetime
 from streamlit_local_storage import LocalStorage
 
 # 1. 페이지 설정
@@ -14,13 +14,11 @@ localS = LocalStorage()
 @st.cache_data(ttl=600)
 def get_processed_data(ticker, start_date):
     try:
-        # RSI 예열을 위해 시작일 6개월 전부터 수집
         fetch_start = pd.to_datetime(start_date) - pd.DateOffset(months=6)
         data = yf.download([ticker, "QQQ"], start=fetch_start, progress=False)
         
         if data.empty: return None
         
-        # 데이터 추출 및 결측치 처리
         if isinstance(data.columns, pd.MultiIndex):
             target_close = data['Close'][ticker].ffill()
             qqq_close = data['Close']['QQQ'].ffill()
@@ -34,7 +32,6 @@ def get_processed_data(ticker, start_date):
         df['prev_close'] = df['close'].shift(1)
         df['prev_close2'] = df['close'].shift(2)
         
-        # Wilder's RSI (QQQ 기준)
         delta = qqq_close.diff()
         gain = delta.where(delta > 0, 0).ewm(alpha=1/14, adjust=False).mean()
         loss = -delta.where(delta < 0, 0).ewm(alpha=1/14, adjust=False).mean()
@@ -45,8 +42,8 @@ def get_processed_data(ticker, start_date):
         st.error(f"⚠️ 데이터 엔진 오류: {e}")
         return None
 
-def run_simulation(df, initial_seed):
-    """사계절 전략 시뮬레이션 엔진 (고정 슬롯 매수 로직)"""
+def run_simulation(df, initial_seed, num_slots):
+    """사계절 전략 시뮬레이션 엔진 (가변 슬롯 반영)"""
     if df is None or df.empty: return pd.DataFrame()
     
     cash, shares, used_slots, slot_cash, avg_price = float(initial_seed), 0.0, 0, 0.0, 0.0
@@ -56,26 +53,23 @@ def run_simulation(df, initial_seed):
     for date, row in df.iterrows():
         p_prev1, p_prev2, curr_close, qqq_curr_close, rsi_val = row['prev_close'], row['prev_close2'], row['close'], row['qqq_close'], row['rsi']
         
-        # x값 및 타점 계산
         x_raw = (p_prev1 + p_prev2) * 1.01 / 1.99
         willow_x = np.ceil(x_raw * 100) / 100
         
-        # 모드 판정 (rsi_val 변수 사용으로 NameError 해결)
         if rsi_val > 65: b_limit, s_limit = willow_x - 0.01, np.ceil((willow_x * 1.03) * 100) / 100
         elif rsi_val > 45: b_limit, s_limit = willow_x - 0.01, willow_x
         elif rsi_val > 30: b_limit, s_limit = np.floor((willow_x * 0.975) * 100) / 100, willow_x
         else: b_limit, s_limit = np.floor((willow_x * 0.975) * 100) / 100, willow_x
 
-        # 1. 매도 로직 (전량 매도 후 사이클 리셋)
         sold_today = False
         if shares > 0 and curr_close >= s_limit:
             cash += (shares * curr_close)
             shares, used_slots, slot_cash, avg_price = 0.0, 0, 0.0, 0.0
             sold_today = True
         
-        # 2. 매수 로직 (고정 슬롯 방식)
-        if not sold_today and used_slots < 5 and curr_close <= b_limit:
-            if used_slots == 0: slot_cash = cash / 5
+        # 설정된 num_slots 반영
+        if not sold_today and used_slots < num_slots and curr_close <= b_limit:
+            if used_slots == 0: slot_cash = cash / num_slots
             
             buy_qty = slot_cash // curr_close
             if buy_qty > 0 and cash >= (buy_qty * curr_close):
@@ -84,7 +78,6 @@ def run_simulation(df, initial_seed):
                 cash -= (buy_qty * curr_close)
                 used_slots += 1
         
-        # 자산 기록
         total_assets = cash + (shares * curr_close)
         qqq_hold_val = (initial_seed / qqq_start_price) * qqq_curr_close
         
@@ -98,19 +91,24 @@ def run_simulation(df, initial_seed):
 
 # --- UI 레이아웃 ---
 with st.sidebar:
-    st.header("⚙️ 기본 설정")
+    st.header("⚙️ 전략 및 운용 설정")
     target_ticker = st.selectbox("대상 종목 선택", ["SOXL", "USD", "QLD"], index=0)
     
-    # 로컬 스토리지 설정 저장/불러오기
+    # 슬롯 분할 수 선택 기능 추가 (3, 4, 5, 6)
     config_key = f"seasons_config_{target_ticker}"
-    saved_config = localS.getItem(config_key) or {"op_start": "2024-01-01", "init_seed": 10000.0}
+    saved_config = localS.getItem(config_key) or {"op_start": "2024-01-01", "init_seed": 10000.0, "num_slots": 5}
     
+    num_slots = st.select_slider("매수 슬롯 분할 수", options=[3, 4, 5, 6], value=int(saved_config.get('num_slots', 5)))
     op_start = st.date_input("실제 운용 시작일", value=pd.to_datetime(saved_config['op_start']))
     init_seed = st.number_input("투자 원금 (USD)", value=float(saved_config['init_seed']), step=1000.0)
     
-    if st.button("💾 이 종목 설정값 저장"):
-        localS.setItem(config_key, {"op_start": op_start.strftime('%Y-%m-%d'), "init_seed": init_seed})
-        st.success(f"{target_ticker} 설정 저장 완료!")
+    if st.button("💾 설정값 저장"):
+        localS.setItem(config_key, {
+            "op_start": op_start.strftime('%Y-%m-%d'), 
+            "init_seed": init_seed,
+            "num_slots": num_slots
+        })
+        st.success(f"설정 저장 완료 (슬롯: {num_slots}회)")
     
     if st.button("🔄 강제 새로고침"):
         st.cache_data.clear()
@@ -122,11 +120,11 @@ tab1, tab2 = st.tabs(["🎯 실시간 추적 & 가이드", "📊 과거 백테�
 with tab1:
     df_live = get_processed_data(target_ticker, op_start.strftime('%Y-%m-%d'))
     if df_live is not None and not df_live.empty:
-        hist_live = run_simulation(df_live, init_seed)
+        hist_live = run_simulation(df_live, init_seed, num_slots)
         cur = hist_live.iloc[-1]
         last_data = df_live.iloc[-1]
         
-        st.subheader(f"📊 {target_ticker} 운용 현황 ({df_live.index[-1].strftime('%Y-%m-%d')})")
+        st.subheader(f"📊 {target_ticker} 운용 현황 (슬롯: {num_slots}회분할)")
         m1, m2, m3, m4 = st.columns(4)
         total_ret = (cur['Total'] / init_seed - 1) * 100
         qqq_ret = (cur['QQQ_Hold'] / init_seed - 1) * 100
@@ -134,11 +132,10 @@ with tab1:
         m1.metric("전략 수익률", f"{total_ret:+.2f}%", f"QQQ 대비 {total_ret-qqq_ret:+.2f}%")
         m2.metric("평균 단가", f"${cur['Avg_Price']:.2f}")
         slots_val = int(cur['Slots'])
-        m3.metric("진행 회차", f"{slots_val} / 5 슬롯")
+        m3.metric("진행 회차", f"{slots_val} / {num_slots} 슬롯")
         m4.metric("현재 총 자산", f"${cur['Total']:,.2f}")
 
         st.divider()
-        # 오늘의 타점 가이드
         rsi_now, p1, p2 = last_data['rsi'], last_data['prev_close'], last_data['prev_close2']
         x_raw = (p1 + p2) * 1.01 / 1.99
         willow_x = np.ceil(x_raw * 100) / 100
@@ -152,11 +149,11 @@ with tab1:
         cl, cr = st.columns(2)
         with cl:
             st.success(f"#### 📥 {slots_val + 1}회차 매수 (LOC)")
-            if slots_val < 5:
-                target_slot_cash = cur['Cash'] / 5 if slots_val == 0 else cur['Slot_Cash']
+            if slots_val < num_slots:
+                target_slot_cash = cur['Cash'] / (num_slots - slots_val) if slots_val == 0 else cur['Slot_Cash']
                 buy_qty = int(target_slot_cash // b_l)
                 st.write(f"**매수 가격:** `${b_l:.2f}` 이하 | **수량:** `{buy_qty} 주` 권장")
-                st.caption(f"기준 RSI: {rsi_now:.2f} | p1: ${p1:.2f} | p2: ${p2:.2f}")
+                st.caption(f"1회 투입 예산: ${target_slot_cash:,.2f}")
             else: st.write("✅ 모든 슬롯 완료")
         with cr:
             st.error("#### 📤 전량 매도 (LOC)")
@@ -165,22 +162,20 @@ with tab1:
             else: st.write("보유 물량 없음")
             
         st.line_chart(hist_live[['Total', 'QQQ_Hold']])
-    else:
-        st.warning("데이터를 가져오지 못했습니다. 사이드바의 [강제 새로고침]을 눌러보세요.")
 
 # --- TAB 2: 백테스트 ---
 with tab2:
-    st.header("🔍 초장기 과거 성과 분석")
+    st.header(f"🔍 {num_slots}슬롯 분할 과거 성과 분석")
     c1, c2, c3 = st.columns(3)
-    with c1: s_date = st.date_input("테스트 시작일", value=datetime(2013, 1, 1), min_value=datetime(2013, 1, 1))
-    with c2: e_date = st.date_input("테스트 종료일", value=datetime.now())
+    with c1: s_date = st.date_input("테스트 시작일", value=datetime(2013, 1, 1), key="bt_start")
+    with c2: e_date = st.date_input("테스트 종료일", value=datetime.now(), key="bt_end")
     with c3: s_seed = st.number_input("테스트 시드", value=10000.0, step=1000.0, key="bt_seed_val")
 
     if st.button("🚀 백테스트 실행"):
         df_back = get_processed_data(target_ticker, s_date.strftime('%Y-%m-%d'))
         if df_back is not None:
             df_back = df_back.loc[:e_date.strftime('%Y-%m-%d')]
-            res_back = run_simulation(df_back, s_seed)
+            res_back = run_simulation(df_back, s_seed, num_slots)
             if not res_back.empty:
                 f_v, f_q = res_back['Total'].iloc[-1], res_back['QQQ_Hold'].iloc[-1]
                 t_r, q_r = (f_v / s_seed - 1) * 100, (f_q / s_seed - 1) * 100
@@ -197,7 +192,6 @@ with tab2:
                 
                 st.line_chart(res_back[['Total', 'QQQ_Hold']])
 
-                # 연도별 성과 표
                 res_back['year'] = res_back.index.year
                 yearly_data = []
                 temp_seed = s_seed
@@ -211,5 +205,5 @@ with tab2:
                         'QQQ 수익률': f"{q_r_y:.2f}%", '전략 MDD': f"{(y_df['Total']/y_df['Total'].cummax()-1).min()*100:.2f}%"
                     })
                     temp_seed = y_e_v
-                st.subheader("📅 연도별 성과 요약 (전략 vs QQQ)")
+                st.subheader(f"📅 연도별 성과 ({num_slots}슬롯 기준)")
                 st.table(pd.DataFrame(yearly_data))
