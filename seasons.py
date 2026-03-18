@@ -43,7 +43,7 @@ def get_processed_data(ticker, start_date):
         return None
 
 def run_simulation(df, initial_seed, num_slots):
-    """사계절 전략 시뮬레이션 엔진 (1~10 가변 슬롯 반영)"""
+    """사계절 전략 시뮬레이션 엔진 (3~6 가변 슬롯 반영)"""
     if df is None or df.empty: return pd.DataFrame()
     
     cash, shares, used_slots, slot_cash, avg_price = float(initial_seed), 0.0, 0, 0.0, 0.0
@@ -96,8 +96,8 @@ with st.sidebar:
     config_key = f"seasons_config_{target_ticker}"
     saved_config = localS.getItem(config_key) or {"op_start": "2024-01-01", "init_seed": 10000.0, "num_slots": 5}
     
-    # 분할 수 슬라이더 범위를 1에서 10으로 확장
-    num_slots = st.slider("매수 슬롯 분할 수 (1~10)", min_value=1, max_value=10, value=int(saved_config.get('num_slots', 5)))
+    # 슬롯 분할 수를 다시 3, 4, 5, 6으로 고정
+    num_slots = st.select_slider("매수 슬롯 분할 수", options=[3, 4, 5, 6], value=int(saved_config.get('num_slots', 5)))
     
     op_start = st.date_input("실제 운용 시작일", value=pd.to_datetime(saved_config['op_start']))
     init_seed = st.number_input("투자 원금 (USD)", value=float(saved_config['init_seed']), step=1000.0)
@@ -150,7 +150,6 @@ with tab1:
         with cl:
             st.success(f"#### 📥 {slots_val + 1}회차 매수 (LOC)")
             if slots_val < num_slots:
-                # 다음 회차 투입 금액 계산 (1회차는 현재 현금 기준, 이후는 고정된 slot_cash 사용)
                 target_slot_cash = cur['Cash'] / (num_slots - slots_val) if slots_val == 0 else cur['Slot_Cash']
                 buy_qty = int(target_slot_cash // b_l)
                 st.write(f"**매수 가격:** `${b_l:.2f}` 이하 | **수량:** `{buy_qty} 주` 권장")
@@ -169,9 +168,9 @@ with tab1:
 with tab2:
     st.header(f"🔍 {num_slots}슬롯 분할 과거 성과 분석")
     c1, c2, c3 = st.columns(3)
-    with c1: s_date = st.date_input("테스트 시작일", value=datetime(2013, 1, 1), min_value=datetime(2013, 1, 1), key="bt_s_ext")
-    with c2: e_date = st.date_input("테스트 종료일", value=datetime.now(), key="bt_e_ext")
-    with c3: s_seed = st.number_input("테스트 시드", value=10000.0, step=1000.0, key="bt_seed_val_ext")
+    with c1: s_date = st.date_input("테스트 시작일", value=datetime(2013, 1, 1), min_value=datetime(2013, 1, 1), key="bt_s_std")
+    with c2: e_date = st.date_input("테스트 종료일", value=datetime.now(), key="bt_e_std")
+    with c3: s_seed = st.number_input("테스트 시드", value=10000.0, step=1000.0, key="bt_seed_val_std")
 
     if st.button("🚀 백테스트 실행"):
         df_back = get_processed_data(target_ticker, s_date.strftime('%Y-%m-%d'))
@@ -193,7 +192,7 @@ with tab2:
                 r4.metric("전략 MDD", f"{mdd:.2f}%")
                 st.line_chart(res_back[['Total', 'QQQ_Hold']])
 
-                # 연도별 성과 상세 요약
+                # 연도별 성과 표
                 res_back['year'] = res_back.index.year
                 yearly_data = []
                 temp_seed = s_seed
