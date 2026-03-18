@@ -14,7 +14,6 @@ localS = LocalStorage()
 @st.cache_data(ttl=3600)
 def get_backtest_data(ticker, start_date, end_date):
     fetch_start = pd.to_datetime(start_date) - pd.DateOffset(months=6)
-    # 선택한 종목과 QQQ(지표용)를 함께 수집
     data = yf.download([ticker, "QQQ"], start=fetch_start, end=end_date, progress=False)
     if data.empty: return None
     
@@ -70,17 +69,15 @@ def fetch_live_data(ticker):
     return float(rsi.iloc[-1]), p1, p2, p_live
 
 # --- UI 레이아웃 ---
-st.title("🌿 사계절 전략 멀티 매니저")
+st.title("🌿 사계절 전략 멀티 매니저 (QLD 포함)")
 
-# 사이드바: 종목 선택 및 계좌 설정
 with st.sidebar:
     st.header("⚙️ 설정")
-    # 종목 선택 기능 추가
-    target_ticker = st.selectbox("대상 종목 선택", ["SOXL", "USD", "TQQQ"], index=0)
+    # TQQQ 대신 QLD로 교체
+    target_ticker = st.selectbox("대상 종목 선택", ["SOXL", "USD", "QLD"], index=0)
     
     st.divider()
     user_name = st.text_input("사용자 이름", value="규원")
-    # 종목별로 데이터를 따로 저장하도록 키값 변경
     storage_key = f"seasons_{target_ticker}_{user_name}"
     saved_data = localS.getItem(storage_key) or {"seed": 10000.0, "profit": 0.0, "slot": 0}
     
@@ -102,7 +99,6 @@ with tab1:
         x_raw = (p1 + p2) * 1.01 / 1.99
         willow_x = np.ceil(x_raw * 100) / 100
         
-        # 모드 판정
         if rsi > 65: mode, color, b_l, s_l = "Ivy", "red", willow_x - 0.01, np.ceil((willow_x * 1.03) * 100) / 100
         elif rsi > 45: mode, color, b_l, s_l = "Willow", "orange", willow_x - 0.01, willow_x
         elif rsi > 30: mode, color, b_l, s_l = "Lily", "blue", np.floor((willow_x * 0.975) * 100) / 100, willow_x
@@ -182,7 +178,6 @@ with tab2:
             m3.metric("CAGR", f"{cagr:.2f}%")
             m4.metric("최대 낙폭(MDD)", f"{mdd:.2f}%")
 
-            # 연도별 수익률 계산 (기존 로직 유지)
             res_df['year'] = res_df.index.year
             prev_val = b_seed
             yearly_summary = []
@@ -194,6 +189,6 @@ with tab2:
                 yearly_summary.append({'연도': yr, '수익률': f"{y_ret:.2f}%", 'MDD': f"{y_mdd:.2f}%"})
                 prev_val = y_end
             
-            st.subheader(f"📅 {target_ticker} 연도별 성과")
+            st.subheader(f"📅 {target_ticker} 연도별 성과 요약")
             st.table(pd.DataFrame(yearly_summary))
             st.line_chart(res_df['Total'])
