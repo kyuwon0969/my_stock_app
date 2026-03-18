@@ -6,30 +6,32 @@ from datetime import datetime, timedelta
 from streamlit_local_storage import LocalStorage
 
 # 1. 페이지 설정
-st.set_page_config(page_title="사계절 전략 & 백테스터", page_icon="🌿", layout="wide")
+st.set_page_config(page_title="사계절 전략 멀티 매니저", page_icon="🌿", layout="wide")
 
 localS = LocalStorage()
 
 # --- 데이터 수집 함수 ---
 @st.cache_data(ttl=3600)
-def get_backtest_data(start_date, end_date):
+def get_backtest_data(ticker, start_date, end_date):
     fetch_start = pd.to_datetime(start_date) - pd.DateOffset(months=6)
-    data = yf.download(["SOXL", "QQQ"], start=fetch_start, end=end_date, progress=False)
+    # 선택한 종목과 QQQ(지표용)를 함께 수집
+    data = yf.download([ticker, "QQQ"], start=fetch_start, end=end_date, progress=False)
     if data.empty: return None
     
     if isinstance(data.columns, pd.MultiIndex):
-        soxl = data['Close']['SOXL'].dropna()
-        qqq = data['Close']['QQQ'].dropna()
+        target_close = data['Close'][ticker].dropna()
+        qqq_close = data['Close']['QQQ'].dropna()
     else:
-        soxl = data['SOXL'].dropna()
-        qqq = data['QQQ'].dropna()
+        target_close = data[ticker].dropna()
+        qqq_close = data['QQQ'].dropna()
     
-    df = pd.DataFrame(index=soxl.index)
-    df['close'] = soxl
+    df = pd.DataFrame(index=target_close.index)
+    df['close'] = target_close
     df['prev_close'] = df['close'].shift(1)
     df['prev_close2'] = df['close'].shift(2)
     
-    delta = qqq.diff()
+    # QQQ 기반 Wilder's RSI 계산
+    delta = qqq_close.diff()
     gain = delta.where(delta > 0, 0)
     loss = -delta.where(delta < 0, 0)
     avg_gain = gain.ewm(alpha=1/14, min_periods=14, adjust=False).mean()
@@ -40,25 +42,25 @@ def get_backtest_data(start_date, end_date):
     return df.loc[start_date:].dropna()
 
 @st.cache_data(ttl=300)
-def fetch_live_data():
-    data = yf.download(["SOXL", "QQQ"], period="6mo", progress=False)
+def fetch_live_data(ticker):
+    data = yf.download([ticker, "QQQ"], period="6mo", progress=False)
     if data.empty or len(data) < 20: return None
     
     if isinstance(data.columns, pd.MultiIndex):
-        soxl = data['Close']['SOXL'].dropna()
-        qqq = data['Close']['QQQ'].dropna()
+        target_close = data['Close'][ticker].dropna()
+        qqq_close = data['Close']['QQQ'].dropna()
     else:
-        soxl = data['SOXL'].dropna()
-        qqq = data['QQQ'].dropna()
+        target_close = data[ticker].dropna()
+        qqq_close = data['QQQ'].dropna()
 
     today = datetime.now().strftime('%Y-%m-%d')
-    if soxl.index[-1].strftime('%Y-%m-%d') == today:
-        p_live, p1, p2 = float(soxl.iloc[-1]), float(soxl.iloc[-2]), float(soxl.iloc[-3])
-        qqq_for_rsi = qqq.iloc[:-1]
+    if target_close.index[-1].strftime('%Y-%m-%d') == today:
+        p_live, p1, p2 = float(target_close.iloc[-1]), float(target_close.iloc[-2]), float(target_close.iloc[-3])
+        qqq_for_rsi = qqq_close.iloc[:-1]
     else:
-        p_live = p1 = float(soxl.iloc[-1])
-        p2 = float(soxl.iloc[-2])
-        qqq_for_rsi = qqq
+        p_live = p1 = float(target_close.iloc[-1])
+        p2 = float(target_close.iloc[-2])
+        qqq_for_rsi = qqq_close
 
     delta = qqq_for_rsi.diff()
     gain = delta.where(delta > 0, 0).ewm(alpha=1/14, adjust=False).mean()
@@ -68,40 +70,50 @@ def fetch_live_data():
     return float(rsi.iloc[-1]), p1, p2, p_live
 
 # --- UI 레이아웃 ---
-st.title("🌿 사계절 전략 매니저 & 백테스터")
-tab1, tab2 = st.tabs(["🎯 실시간 타점 가이드", "📊 과거 백테스트"])
+st.title("🌿 사계절 전략 멀티 매니저")
+
+# 사이드바: 종목 선택 및 계좌 설정
+with st.sidebar:
+    st.header("⚙️ 설정")
+    # 종목 선택 기능 추가
+    target_ticker = st.selectbox("대상 종목 선택", ["SOXL", "USD", "TQQQ"], index=0)
+    
+    st.divider()
+    user_name = st.text_input("사용자 이름", value="규원")
+    # 종목별로 데이터를 따로 저장하도록 키값 변경
+    storage_key = f"seasons_{target_ticker}_{user_name}"
+    saved_data = localS.getItem(storage_key) or {"seed": 10000.0, "profit": 0.0, "slot": 0}
+    
+    init_seed = st.number_input(f"{target_ticker} 초기 시드 (USD)", value=float(saved_data['seed']))
+    current_profit = st.number_input(f"{target_ticker} 누적 수익금 (USD)", value=float(saved_data['profit']))
+    current_slot = st.slider("현재 매수 완료 회차", 0, 5, int(saved_data['slot']))
+    
+    if st.button("💾 데이터 저장"):
+        localS.setItem(storage_key, {"seed": init_seed, "profit": current_profit, "slot": current_slot})
+        st.success(f"{target_ticker} 데이터 저장 완료!")
+
+tab1, tab2 = st.tabs([f"🎯 {target_ticker} 실시간 가이드", "📊 과거 백테스트"])
 
 # --- TAB 1: 실시간 가이드 ---
 with tab1:
-    with st.sidebar:
-        st.header("👤 내 계좌 설정")
-        user_name = st.text_input("사용자 이름", value="규원")
-        storage_key = f"seasons_data_{user_name}"
-        saved_data = localS.getItem(storage_key) or {"seed": 10000.0, "profit": 0.0, "slot": 0}
-        init_seed = st.sidebar.number_input("초기 시드 (USD)", value=float(saved_data['seed']))
-        current_profit = st.sidebar.number_input("누적 수익금 (USD)", value=float(saved_data['profit']))
-        current_slot = st.sidebar.slider("현재 매수 완료 회차", 0, 5, int(saved_data['slot']))
-        if st.sidebar.button("💾 데이터 저장"):
-            localS.setItem(storage_key, {"seed": init_seed, "profit": current_profit, "slot": current_slot})
-            st.sidebar.success("저장 완료!")
-
-    res = fetch_live_data()
+    res = fetch_live_data(target_ticker)
     if res:
         rsi, p1, p2, live = res
         x_raw = (p1 + p2) * 1.01 / 1.99
         willow_x = np.ceil(x_raw * 100) / 100
         
+        # 모드 판정
         if rsi > 65: mode, color, b_l, s_l = "Ivy", "red", willow_x - 0.01, np.ceil((willow_x * 1.03) * 100) / 100
         elif rsi > 45: mode, color, b_l, s_l = "Willow", "orange", willow_x - 0.01, willow_x
         elif rsi > 30: mode, color, b_l, s_l = "Lily", "blue", np.floor((willow_x * 0.975) * 100) / 100, willow_x
         else: mode, color, b_l, s_l = "Tulip", "purple", np.floor((willow_x * 0.975) * 100) / 100, willow_x
 
-        st.markdown(f"### 현재 시장 모드: :{color}[{mode}]")
+        st.markdown(f"### {target_ticker} 현재 모드: :{color}[{mode}]")
         c1, c2, c3, c4 = st.columns(4)
-        c1.metric("QQQ RSI", f"{rsi:.2f}")
+        c1.metric("QQQ RSI (지표)", f"{rsi:.2f}")
         c2.metric("p1 (어제)", f"${p1:.2f}")
         c3.metric("p2 (그저께)", f"${p2:.2f}")
-        c4.metric("현재가", f"${live:.2f}", delta=f"{live-p1:.2f}")
+        c4.metric(f"{target_ticker} 현재가", f"${live:.2f}", delta=f"{live-p1:.2f}")
 
         st.divider()
         total_cap = init_seed + current_profit
@@ -120,17 +132,16 @@ with tab1:
 
 # --- TAB 2: 백테스트 ---
 with tab2:
-    st.header("📈 사계절 최적화 전략 성과 분석")
+    st.header(f"📈 {target_ticker} 전략 성과 분석")
     col_a, col_b, col_c = st.columns(3)
     with col_a: b_start = st.date_input("시작일", value=datetime(2023, 1, 1))
     with col_b: b_end = st.date_input("종료일", value=datetime.now())
     with col_c: b_seed = st.number_input("테스트 시드 (USD)", value=10000, step=1000)
     
-    if st.button("🚀 백테스트 실행"):
-        df_back = get_backtest_data(b_start.strftime('%Y-%m-%d'), b_end.strftime('%Y-%m-%d'))
+    if st.button(f"🚀 {target_ticker} 백테스트 실행"):
+        df_back = get_backtest_data(target_ticker, b_start.strftime('%Y-%m-%d'), b_end.strftime('%Y-%m-%d'))
         if df_back is not None:
-            cash, shares, used_slots = b_seed, 0, 0
-            slot_cash = 0  # 한 사이클의 1회분 고정 매수 금액
+            cash, shares, used_slots, slot_cash = b_seed, 0, 0, 0
             history = []
             
             for date, row in df_back.iterrows():
@@ -138,27 +149,19 @@ with tab2:
                 x_raw = (p_prev1 + p_prev2) * 1.01 / 1.99
                 willow_x = np.ceil(x_raw * 100) / 100
                 
-                # 모드 판정
                 if rsi_val > 65: b_limit, s_limit = willow_x - 0.01, np.ceil((willow_x * 1.03) * 100) / 100
                 elif rsi_val > 45: b_limit, s_limit = willow_x - 0.01, willow_x
                 elif rsi_val > 30: b_limit, s_limit = np.floor((willow_x * 0.975) * 100) / 100, willow_x
                 else: b_limit, s_limit = np.floor((willow_x * 0.975) * 100) / 100, willow_x
 
-                # 1. 매도 로직 (전량 매도 후 다음 사이클 준비)
                 sold_today = False
                 if shares > 0 and curr_close >= s_limit:
                     cash += (shares * curr_close)
-                    shares, used_slots = 0, 0
-                    slot_cash = 0  # 사이클 종료로 슬롯 금액 초기화
-                    sold_today = True
+                    shares, used_slots, slot_cash, sold_today = 0, 0, 0, True
                 
-                # 2. 매수 로직 (고정 슬롯 금액 적용)
                 if not sold_today and used_slots < 5 and curr_close <= b_limit:
-                    # 최초 진입 시점에만 1회분 매수 금액(slot_cash)을 확정함
-                    if used_slots == 0:
-                        slot_cash = cash / 5
-                    
-                    if cash >= (slot_cash):
+                    if used_slots == 0: slot_cash = cash / 5
+                    if cash >= slot_cash:
                         buy_qty = slot_cash // curr_close
                         shares += buy_qty
                         cash -= (buy_qty * curr_close)
@@ -166,11 +169,9 @@ with tab2:
                 
                 history.append({'Date': date, 'Total': cash + (shares * curr_close)})
             
-            # 성과 지표 계산
             res_df = pd.DataFrame(history).set_index('Date')
             final_val = res_df['Total'].iloc[-1]
-            total_ret = (final_val / b_seed - 1) * 100
-            days = (res_df.index[-1] - res_df.index[0]).days
+            total_ret, days = (final_val / b_seed - 1) * 100, (res_df.index[-1] - res_df.index[0]).days
             cagr = ((final_val / b_seed) ** (365.25 / days) - 1) * 100
             mdd = (res_df['Total'] / res_df['Total'].cummax() - 1).min() * 100
 
@@ -181,6 +182,7 @@ with tab2:
             m3.metric("CAGR", f"{cagr:.2f}%")
             m4.metric("최대 낙폭(MDD)", f"{mdd:.2f}%")
 
+            # 연도별 수익률 계산 (기존 로직 유지)
             res_df['year'] = res_df.index.year
             prev_val = b_seed
             yearly_summary = []
@@ -192,6 +194,6 @@ with tab2:
                 yearly_summary.append({'연도': yr, '수익률': f"{y_ret:.2f}%", 'MDD': f"{y_mdd:.2f}%"})
                 prev_val = y_end
             
-            st.subheader("📅 연도별 성과 요약")
+            st.subheader(f"📅 {target_ticker} 연도별 성과")
             st.table(pd.DataFrame(yearly_summary))
             st.line_chart(res_df['Total'])
