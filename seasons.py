@@ -97,7 +97,7 @@ with st.sidebar:
     saved_config = localS.getItem(config_key) or {"op_start": "2024-01-01", "init_seed": 10000.0, "num_slots": 5}
     
     # 슬롯 분할 수를 다시 3, 4, 5, 6으로 고정
-    num_slots = st.select_slider("매수 슬롯 분할 수", options=[3, 4, 5, 6], value=int(saved_config.get('num_slots', 5)))
+    num_slots = st.select_slider("매수 슬롯 분할 수(5분할 추천)", options=[3, 4, 5, 6], value=int(saved_config.get('num_slots', 5)))
     
     op_start = st.date_input("실제 운용 시작일", value=pd.to_datetime(saved_config['op_start']))
     init_seed = st.number_input("투자 원금 (USD)", value=float(saved_config['init_seed']), step=1000.0)
