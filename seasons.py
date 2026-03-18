@@ -5,35 +5,43 @@ import numpy as np
 from datetime import datetime, timedelta
 
 # 1. 페이지 설정
-st.set_page_config(page_title="사계절 전략 매니저", page_icon="🌿", layout="wide")
+st.set_page_config(page_title="사계절 전략 매니저 & 백테스터", page_icon="🌿", layout="wide")
 
 # --- 데이터 엔진 ---
 @st.cache_data(ttl=3600)
 def get_processed_data(ticker, start_date, end_date):
-    fetch_start = pd.to_datetime(start_date) - pd.DateOffset(months=6)
-    data = yf.download([ticker, "QQQ"], start=fetch_start, end=end_date, progress=False)
-    if data.empty: return None
-    
-    if isinstance(data.columns, pd.MultiIndex):
-        target_close = data['Close'][ticker].dropna()
-        qqq_close = data['Close']['QQQ'].dropna()
-    else:
-        target_close = data[ticker].dropna()
-        qqq_close = data['QQQ'].dropna()
-    
-    df = pd.DataFrame(index=target_close.index)
-    df['close'] = target_close
-    df['prev_close'] = df['close'].shift(1)
-    df['prev_close2'] = df['close'].shift(2)
-    
-    delta = qqq_close.diff()
-    gain = delta.where(delta > 0, 0).ewm(alpha=1/14, adjust=False).mean()
-    loss = -delta.where(delta < 0, 0).ewm(alpha=1/14, adjust=False).mean()
-    df['rsi'] = (100 - (100 / (1 + (gain / loss.replace(0, np.nan))))).shift(1)
-    
-    return df.loc[start_date:].dropna()
+    """지정한 기간의 데이터를 가져오고 지표 계산"""
+    try:
+        # RSI 계산 예열을 위해 시작일 6개월 전부터 수집
+        fetch_start = pd.to_datetime(start_date) - pd.DateOffset(months=6)
+        data = yf.download([ticker, "QQQ"], start=fetch_start, end=end_date, progress=False)
+        if data.empty: return None
+        
+        if isinstance(data.columns, pd.MultiIndex):
+            target_close = data['Close'][ticker].dropna()
+            qqq_close = data['Close']['QQQ'].dropna()
+        else:
+            target_close = data[ticker].dropna()
+            qqq_close = data['QQQ'].dropna()
+        
+        df = pd.DataFrame(index=target_close.index)
+        df['close'] = target_close
+        df['prev_close'] = df['close'].shift(1)
+        df['prev_close2'] = df['close'].shift(2)
+        
+        # Wilder's RSI (QQQ 기준)
+        delta = qqq_close.diff()
+        gain = delta.where(delta > 0, 0).ewm(alpha=1/14, adjust=False).mean()
+        loss = -delta.where(delta < 0, 0).ewm(alpha=1/14, adjust=False).mean()
+        df['rsi'] = (100 - (100 / (1 + (gain / loss.replace(0, np.nan))))).shift(1)
+        
+        return df.loc[start_date:].dropna()
+    except Exception as e:
+        st.error(f"데이터 수집 중 오류: {e}")
+        return None
 
 def run_simulation(df, initial_seed):
+    """사계절 전략 시뮬레이션 엔진 (고정 슬롯 매수 로직)"""
     cash, shares, used_slots, slot_cash, avg_price = initial_seed, 0, 0, 0, 0
     history = []
     
@@ -42,19 +50,23 @@ def run_simulation(df, initial_seed):
         x_raw = (p_prev1 + p_prev2) * 1.01 / 1.99
         willow_x = np.ceil(x_raw * 100) / 100
         
+        # 모드 판정
         if rsi_val > 65: b_limit, s_limit = willow_x - 0.01, np.ceil((willow_x * 1.03) * 100) / 100
         elif rsi_val > 45: b_limit, s_limit = willow_x - 0.01, willow_x
         elif rsi_val > 30: b_limit, s_limit = np.floor((willow_x * 0.975) * 100) / 100, willow_x
         else: b_limit, s_limit = np.floor((willow_x * 0.975) * 100) / 100, willow_x
 
+        # 1. 매도 (전량 매도 후 사이클 리셋)
         sold_today = False
         if shares > 0 and curr_close >= s_limit:
             cash += (shares * curr_close)
             shares, used_slots, slot_cash, avg_price = 0, 0, 0, 0
             sold_today = True
         
+        # 2. 매수 (고정 슬롯 방식)
         if not sold_today and used_slots < 5 and curr_close <= b_limit:
             if used_slots == 0: slot_cash = cash / 5
+            
             buy_qty = slot_cash // curr_close
             if buy_qty > 0 and cash >= (buy_qty * curr_close):
                 avg_price = ((avg_price * shares) + (buy_qty * curr_close)) / (shares + buy_qty)
@@ -73,23 +85,23 @@ with st.sidebar:
     st.header("⚙️ 기본 설정")
     target_ticker = st.selectbox("대상 종목 선택", ["SOXL", "USD", "QLD"], index=0)
     st.divider()
-    op_start = st.date_input("실제 운용 시작일", value=datetime(2024, 1, 1), key="op_start")
+    op_start = st.date_input("실제 운용 시작일", value=datetime(2024, 1, 1))
     init_seed = st.number_input("투자 원금 (USD)", value=10000.0, step=1000.0)
 
 tab1, tab2 = st.tabs(["🎯 실시간 추적 & 가이드", "📊 과거 백테스트 리포트"])
 
 # --- TAB 1: 실시간 추적 ---
 with tab1:
-    df_live = get_processed_data(target_ticker, op_start.strftime('%Y-%m-%d'), datetime.now().strftime('%Y-%m-%d'))
+    # 종료일을 오늘 + 1일로 설정하여 최신 데이터 확보
+    df_live = get_processed_data(target_ticker, op_start.strftime('%Y-%m-%d'), (datetime.now() + timedelta(days=1)).strftime('%Y-%m-%d'))
+    
     if df_live is not None and not df_live.empty:
         hist_live = run_simulation(df_live, init_seed)
         cur = hist_live.iloc[-1]
         last_data = df_live.iloc[-1]
         
-        # 누적 수익률 계산
         total_return_pct = (cur['Total'] / init_seed - 1) * 100
 
-        # 상단 현황 대시보드
         st.subheader(f"📊 {target_ticker} 운용 현황")
         m1, m2, m3, m4 = st.columns(4)
         m1.metric("누적 수익률", f"{total_return_pct:+.2f}%")
@@ -97,7 +109,6 @@ with tab1:
         m3.metric("진행 회차", f"{int(cur['Slots'])} / 5 슬롯")
         m4.metric("현재 총 자산", f"${cur['Total']:,.2f}")
 
-        # 주문 가이드
         st.divider()
         rsi_now = last_data['rsi']
         p1, p2 = last_data['prev_close'], last_data['prev_close2']
@@ -115,7 +126,6 @@ with tab1:
             st.success(f"#### 📥 {int(cur['Slots']) + 1}회차 매수 (LOC)")
             if cur['Slots'] < 5:
                 st.write(f"**가격:** `${b_l:.2f}` 이하")
-                # 요청하신 RSI, p1, p2 지표 노출
                 st.caption(f"기준 RSI: {rsi_now:.2f} | p1: ${p1:.2f} | p2: ${p2:.2f}")
             else: st.write("✅ 모든 슬롯 체결 완료")
         with cr:
@@ -128,3 +138,59 @@ with tab1:
         st.divider()
         st.subheader("📈 운용 자산 흐름")
         st.line_chart(hist_live['Total'])
+    else:
+        st.warning("데이터를 불러오는 중입니다. 잠시만 기다려주세요.")
+
+# --- TAB 2: 백테스트 ---
+with tab2:
+    st.header("🔍 과거 기간 성과 분석")
+    col1, col2, col3 = st.columns(3)
+    with col1: s_date = st.date_input("테스트 시작일", value=datetime(2016, 1, 1))
+    with col2: e_date = st.date_input("테스트 종료일", value=datetime.now())
+    with col3: s_seed = st.number_input("테스트 시드", value=10000.0, step=1000.0)
+
+    if st.button("🚀 백테스트 실행"):
+        # 백테스트용 데이터 수집 (시작일/종료일 명시적 전달)
+        df_back = get_processed_data(target_ticker, s_date.strftime('%Y-%m-%d'), e_date.strftime('%Y-%m-%d'))
+        
+        if df_back is not None and not df_back.empty:
+            res_back = run_simulation(df_back, s_seed)
+            if not res_back.empty:
+                final_v = res_back['Total'].iloc[-1]
+                
+                # 지표 계산
+                total_ret = (final_v / s_seed - 1) * 100
+                days = (res_back.index[-1] - res_back.index[0]).days
+                cagr = ((final_v / s_seed) ** (365.25 / (days if days > 0 else 1)) - 1) * 100
+                mdd = (res_back['Total'] / res_back['Total'].cummax() - 1).min() * 100
+
+                st.divider()
+                r1, r2, r3, r4 = st.columns(4)
+                r1.metric("최종 자산", f"${final_v:,.2f}")
+                r2.metric("총 수익률", f"{total_ret:,.2f}%")
+                r3.metric("CAGR (연복리)", f"{cagr:.2f}%")
+                r4.metric("MDD (최대낙폭)", f"{mdd:.2f}%")
+
+                st.line_chart(res_back['Total'])
+
+                # 연도별 수익률 요약
+                res_back['year'] = res_back.index.year
+                yearly = []
+                # 첫 연도 시작가를 테스트 시드로 설정
+                temp_seed = s_seed
+                for yr in sorted(res_back['year'].unique()):
+                    y_df = res_back[res_back['year'] == yr]
+                    y_e = y_df['Total'].iloc[-1]
+                    yearly.append({
+                        '연도': yr, 
+                        '수익률': f"{(y_e/temp_seed-1)*100:.2f}%", 
+                        'MDD': f"{(y_df['Total']/y_df['Total'].cummax()-1).min()*100:.2f}%"
+                    })
+                    temp_seed = y_e # 다음 연도 시작가는 전년도 종가
+                
+                st.subheader("📅 연도별 성과 요약")
+                st.table(pd.DataFrame(yearly))
+            else:
+                st.error("시뮬레이션 결과가 없습니다.")
+        else:
+            st.error("해당 기간의 데이터를 가져오지 못했습니다. 날짜를 확인해 주세요.")
