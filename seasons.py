@@ -2,7 +2,7 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import numpy as np
-from datetime import datetime
+from datetime import datetime, timedelta
 from streamlit_local_storage import LocalStorage
 
 # 1. 페이지 설정
@@ -43,7 +43,7 @@ def get_processed_data(ticker, start_date):
         return None
 
 def run_simulation(df, initial_seed, num_slots):
-    """사계절 전략 시뮬레이션 엔진 (가변 슬롯 반영)"""
+    """사계절 전략 시뮬레이션 엔진 (1~10 가변 슬롯 반영)"""
     if df is None or df.empty: return pd.DataFrame()
     
     cash, shares, used_slots, slot_cash, avg_price = float(initial_seed), 0.0, 0, 0.0, 0.0
@@ -67,7 +67,6 @@ def run_simulation(df, initial_seed, num_slots):
             shares, used_slots, slot_cash, avg_price = 0.0, 0, 0.0, 0.0
             sold_today = True
         
-        # 설정된 num_slots 반영
         if not sold_today and used_slots < num_slots and curr_close <= b_limit:
             if used_slots == 0: slot_cash = cash / num_slots
             
@@ -94,21 +93,22 @@ with st.sidebar:
     st.header("⚙️ 전략 및 운용 설정")
     target_ticker = st.selectbox("대상 종목 선택", ["SOXL", "USD", "QLD"], index=0)
     
-    # 슬롯 분할 수 선택 기능 추가 (3, 4, 5, 6)
     config_key = f"seasons_config_{target_ticker}"
     saved_config = localS.getItem(config_key) or {"op_start": "2024-01-01", "init_seed": 10000.0, "num_slots": 5}
     
-    num_slots = st.select_slider("매수 슬롯 분할 수", options=[3, 4, 5, 6], value=int(saved_config.get('num_slots', 5)))
+    # 분할 수 슬라이더 범위를 1에서 10으로 확장
+    num_slots = st.slider("매수 슬롯 분할 수 (1~10)", min_value=1, max_value=10, value=int(saved_config.get('num_slots', 5)))
+    
     op_start = st.date_input("실제 운용 시작일", value=pd.to_datetime(saved_config['op_start']))
     init_seed = st.number_input("투자 원금 (USD)", value=float(saved_config['init_seed']), step=1000.0)
     
-    if st.button("💾 설정값 저장"):
+    if st.button("💾 이 종목 설정값 저장"):
         localS.setItem(config_key, {
             "op_start": op_start.strftime('%Y-%m-%d'), 
             "init_seed": init_seed,
             "num_slots": num_slots
         })
-        st.success(f"설정 저장 완료 (슬롯: {num_slots}회)")
+        st.success(f"저장 완료 (분할: {num_slots}회)")
     
     if st.button("🔄 강제 새로고침"):
         st.cache_data.clear()
@@ -124,7 +124,7 @@ with tab1:
         cur = hist_live.iloc[-1]
         last_data = df_live.iloc[-1]
         
-        st.subheader(f"📊 {target_ticker} 운용 현황 (슬롯: {num_slots}회분할)")
+        st.subheader(f"📊 {target_ticker} 운용 현황 ({num_slots}분할 모드)")
         m1, m2, m3, m4 = st.columns(4)
         total_ret = (cur['Total'] / init_seed - 1) * 100
         qqq_ret = (cur['QQQ_Hold'] / init_seed - 1) * 100
@@ -150,15 +150,17 @@ with tab1:
         with cl:
             st.success(f"#### 📥 {slots_val + 1}회차 매수 (LOC)")
             if slots_val < num_slots:
+                # 다음 회차 투입 금액 계산 (1회차는 현재 현금 기준, 이후는 고정된 slot_cash 사용)
                 target_slot_cash = cur['Cash'] / (num_slots - slots_val) if slots_val == 0 else cur['Slot_Cash']
                 buy_qty = int(target_slot_cash // b_l)
                 st.write(f"**매수 가격:** `${b_l:.2f}` 이하 | **수량:** `{buy_qty} 주` 권장")
-                st.caption(f"1회 투입 예산: ${target_slot_cash:,.2f}")
+                st.caption(f"1회 투입 예산: ${target_slot_cash:,.2f} | 기준 RSI: {rsi_now:.2f}")
             else: st.write("✅ 모든 슬롯 완료")
         with cr:
             st.error("#### 📤 전량 매도 (LOC)")
             if cur['Shares'] > 0:
                 st.write(f"**매도 가격:** `${s_l:.2f}` 이상 | **수량:** `{int(cur['Shares'])} 주` (전량)")
+                st.write(f"**목표 수익률:** `{(s_l/cur['Avg_Price']-1)*100:+.2f}%` (평단 대비)")
             else: st.write("보유 물량 없음")
             
         st.line_chart(hist_live[['Total', 'QQQ_Hold']])
@@ -167,9 +169,9 @@ with tab1:
 with tab2:
     st.header(f"🔍 {num_slots}슬롯 분할 과거 성과 분석")
     c1, c2, c3 = st.columns(3)
-    with c1: s_date = st.date_input("테스트 시작일", value=datetime(2013, 1, 1), key="bt_start")
-    with c2: e_date = st.date_input("테스트 종료일", value=datetime.now(), key="bt_end")
-    with c3: s_seed = st.number_input("테스트 시드", value=10000.0, step=1000.0, key="bt_seed_val")
+    with c1: s_date = st.date_input("테스트 시작일", value=datetime(2013, 1, 1), min_value=datetime(2013, 1, 1), key="bt_s_ext")
+    with c2: e_date = st.date_input("테스트 종료일", value=datetime.now(), key="bt_e_ext")
+    with c3: s_seed = st.number_input("테스트 시드", value=10000.0, step=1000.0, key="bt_seed_val_ext")
 
     if st.button("🚀 백테스트 실행"):
         df_back = get_processed_data(target_ticker, s_date.strftime('%Y-%m-%d'))
@@ -189,9 +191,9 @@ with tab2:
                 r2.metric("총 수익률", f"{t_r:,.2f}%", f"QQQ 대비 {t_r-q_r:+.2f}%")
                 r3.metric("CAGR", f"{cagr:.2f}%")
                 r4.metric("전략 MDD", f"{mdd:.2f}%")
-                
                 st.line_chart(res_back[['Total', 'QQQ_Hold']])
 
+                # 연도별 성과 상세 요약
                 res_back['year'] = res_back.index.year
                 yearly_data = []
                 temp_seed = s_seed
@@ -205,5 +207,5 @@ with tab2:
                         'QQQ 수익률': f"{q_r_y:.2f}%", '전략 MDD': f"{(y_df['Total']/y_df['Total'].cummax()-1).min()*100:.2f}%"
                     })
                     temp_seed = y_e_v
-                st.subheader(f"📅 연도별 성과 ({num_slots}슬롯 기준)")
+                st.subheader(f"📅 연도별 성과 요약 ({num_slots}슬롯)")
                 st.table(pd.DataFrame(yearly_data))
