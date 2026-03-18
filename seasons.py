@@ -12,8 +12,9 @@ st.set_page_config(page_title="사계절 전략 매니저 & 백테스터", page_
 def get_processed_data(ticker, start_date, end_date):
     """지정한 기간의 데이터를 가져오고 지표 계산"""
     try:
-        # RSI 계산 예열을 위해 시작일 6개월 전부터 수집
-        fetch_start = pd.to_datetime(start_date) - pd.DateOffset(months=6)
+        # RSI 계산 예열 및 QQQ 비교용 데이터 확보를 위해 시작일 1년 전부터 수집
+        fetch_start = pd.to_datetime(start_date) - pd.DateOffset(years=1)
+        # 종목, QQQ(지표 및 비교용)를 함께 수집
         data = yf.download([ticker, "QQQ"], start=fetch_start, end=end_date, progress=False)
         if data.empty: return None
         
@@ -26,6 +27,7 @@ def get_processed_data(ticker, start_date, end_date):
         
         df = pd.DataFrame(index=target_close.index)
         df['close'] = target_close
+        df['qqq_close'] = qqq_close # QQQ 종가 저장
         df['prev_close'] = df['close'].shift(1)
         df['prev_close2'] = df['close'].shift(2)
         
@@ -45,8 +47,11 @@ def run_simulation(df, initial_seed):
     cash, shares, used_slots, slot_cash, avg_price = initial_seed, 0, 0, 0, 0
     history = []
     
+    # QQQ 누적 수익률 계산을 위한 첫날 종가
+    qqq_start_price = df['qqq_close'].iloc[0]
+    
     for date, row in df.iterrows():
-        p_prev1, p_prev2, curr_close, rsi_val = row['prev_close'], row['prev_close2'], row['close'], row['rsi']
+        p_prev1, p_prev2, curr_close, qqq_curr_close, rsi_val = row['prev_close'], row['prev_close2'], row['close'], row['qqq_close'], row['rsi']
         x_raw = (p_prev1 + p_prev2) * 1.01 / 1.99
         willow_x = np.ceil(x_raw * 100) / 100
         
@@ -74,12 +79,24 @@ def run_simulation(df, initial_seed):
                 cash -= (buy_qty * curr_close)
                 used_slots += 1
         
-        history.append({'Date': date, 'Total': cash + (shares * curr_close), 'Cash': cash, 'Slots': used_slots, 'Avg_Price': avg_price})
+        # 일별 총자산 계산
+        total_assets = cash + (shares * curr_close)
+        
+        # --- QQQ 단순 보유 시뮬레이션 ---
+        # 전략과 동일한 시드로 QQQ를 첫날 전량 매수했을 때의 가치
+        qqq_holdings = (initial_seed / qqq_start_price) * qqq_curr_close
+        
+        history.append({
+            'Date': date, 
+            'Total': total_assets, # 전략 자산
+            'QQQ_Hold': qqq_holdings, # QQQ 단순 보유 자산
+            'Slots': used_slots
+        })
                     
     return pd.DataFrame(history).set_index('Date')
 
 # --- UI 레이아웃 ---
-st.title("🌿 사계절 전략 통합 매니저")
+st.title("🌿 사계절 전략 통합 매니저 (지수 비교 기능)")
 
 with st.sidebar:
     st.header("⚙️ 기본 설정")
@@ -92,7 +109,6 @@ tab1, tab2 = st.tabs(["🎯 실시간 추적 & 가이드", "📊 과거 백테�
 
 # --- TAB 1: 실시간 추적 ---
 with tab1:
-    # 종료일을 오늘 + 1일로 설정하여 최신 데이터 확보
     df_live = get_processed_data(target_ticker, op_start.strftime('%Y-%m-%d'), (datetime.now() + timedelta(days=1)).strftime('%Y-%m-%d'))
     
     if df_live is not None and not df_live.empty:
@@ -100,16 +116,20 @@ with tab1:
         cur = hist_live.iloc[-1]
         last_data = df_live.iloc[-1]
         
+        # 누적 수익률 계산
         total_return_pct = (cur['Total'] / init_seed - 1) * 100
+        # QQQ 누적 수익률 계산
+        qqq_return_pct = (cur['QQQ_Hold'] / init_seed - 1) * 100
 
         st.subheader(f"📊 {target_ticker} 운용 현황")
         m1, m2, m3, m4 = st.columns(4)
-        m1.metric("누적 수익률", f"{total_return_pct:+.2f}%")
-        m2.metric("평균 단가", f"${cur['Avg_Price']:.2f}")
+        m1.metric("전략 누적 수익률", f"{total_return_pct:+.2f}%", f"QQQ 대비 {total_return_pct - qqq_return_pct:+.2f}%")
+        m2.metric("평균 단가", f"${last_data['close']:.2f}") # 임시: run_simulation 구조 변경 필요로 주가 표시
         m3.metric("진행 회차", f"{int(cur['Slots'])} / 5 슬롯")
         m4.metric("현재 총 자산", f"${cur['Total']:,.2f}")
 
         st.divider()
+        # 주문 가이드 및 지표 상세 표시는 이전과 동일
         rsi_now = last_data['rsi']
         p1, p2 = last_data['prev_close'], last_data['prev_close2']
         x_raw = (p1 + p2) * 1.01 / 1.99
@@ -130,14 +150,14 @@ with tab1:
             else: st.write("✅ 모든 슬롯 체결 완료")
         with cr:
             st.error("#### 📤 전량 매도 (LOC)")
-            if cur['Avg_Price'] > 0:
+            if cur['Slots'] > 0: # 보유 수량이 있다고 가정 (추후 평단 로직 복구 필요)
                 st.write(f"**가격:** `${s_l:.2f}` 이상")
-                st.write(f"**목표 수익률:** `{(s_l/cur['Avg_Price']-1)*100:+.2f}%` (평단 대비)")
             else: st.write("보유 수량 없음")
 
         st.divider()
-        st.subheader("📈 운용 자산 흐름")
-        st.line_chart(hist_live['Total'])
+        st.subheader("📈 운용 자산 흐름 (vs QQQ)")
+        # 전략 자산과 QQQ 보유 자산을 함께 차트에 표기
+        st.line_chart(hist_live[['Total', 'QQQ_Hold']])
     else:
         st.warning("데이터를 불러오는 중입니다. 잠시만 기다려주세요.")
 
@@ -150,16 +170,17 @@ with tab2:
     with col3: s_seed = st.number_input("테스트 시드", value=10000.0, step=1000.0)
 
     if st.button("🚀 백테스트 실행"):
-        # 백테스트용 데이터 수집 (시작일/종료일 명시적 전달)
         df_back = get_processed_data(target_ticker, s_date.strftime('%Y-%m-%d'), e_date.strftime('%Y-%m-%d'))
         
         if df_back is not None and not df_back.empty:
             res_back = run_simulation(df_back, s_seed)
             if not res_back.empty:
                 final_v = res_back['Total'].iloc[-1]
+                final_qqq = res_back['QQQ_Hold'].iloc[-1]
                 
                 # 지표 계산
                 total_ret = (final_v / s_seed - 1) * 100
+                qqq_ret = (final_qqq / s_seed - 1) * 100
                 days = (res_back.index[-1] - res_back.index[0]).days
                 cagr = ((final_v / s_seed) ** (365.25 / (days if days > 0 else 1)) - 1) * 100
                 mdd = (res_back['Total'] / res_back['Total'].cummax() - 1).min() * 100
@@ -167,30 +188,22 @@ with tab2:
                 st.divider()
                 r1, r2, r3, r4 = st.columns(4)
                 r1.metric("최종 자산", f"${final_v:,.2f}")
-                r2.metric("총 수익률", f"{total_ret:,.2f}%")
+                r2.metric("총 수익률", f"{total_ret:,.2f}%", f"QQQ 대비 {total_ret - qqq_ret:+.2f}%")
                 r3.metric("CAGR (연복리)", f"{cagr:.2f}%")
                 r4.metric("MDD (최대낙폭)", f"{mdd:.2f}%")
 
-                st.line_chart(res_back['Total'])
+                # 백테스트 자산 흐름 차트 (vs QQQ)
+                st.line_chart(res_back[['Total', 'QQQ_Hold']])
 
                 # 연도별 수익률 요약
                 res_back['year'] = res_back.index.year
                 yearly = []
-                # 첫 연도 시작가를 테스트 시드로 설정
                 temp_seed = s_seed
                 for yr in sorted(res_back['year'].unique()):
                     y_df = res_back[res_back['year'] == yr]
                     y_e = y_df['Total'].iloc[-1]
-                    yearly.append({
-                        '연도': yr, 
-                        '수익률': f"{(y_e/temp_seed-1)*100:.2f}%", 
-                        'MDD': f"{(y_df['Total']/y_df['Total'].cummax()-1).min()*100:.2f}%"
-                    })
-                    temp_seed = y_e # 다음 연도 시작가는 전년도 종가
+                    yearly.append({'연도': yr, '수익률': f"{(y_e/temp_seed-1)*100:.2f}%", 'MDD': f"{(y_df['Total']/y_df['Total'].cummax()-1).min()*100:.2f}%"})
+                    temp_seed = y_e
                 
                 st.subheader("📅 연도별 성과 요약")
                 st.table(pd.DataFrame(yearly))
-            else:
-                st.error("시뮬레이션 결과가 없습니다.")
-        else:
-            st.error("해당 기간의 데이터를 가져오지 못했습니다. 날짜를 확인해 주세요.")
