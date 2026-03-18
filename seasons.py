@@ -3,46 +3,17 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
-from streamlit_local_storage import LocalStorage
 
 # 1. 페이지 설정
-st.set_page_config(page_title="사계절 전략 멀티 매니저", page_icon="🌿", layout="wide")
-
-localS = LocalStorage()
+st.set_page_config(page_title="사계절 전략 자동 매니저", page_icon="🌿", layout="wide")
 
 # --- 데이터 수집 함수 ---
-@st.cache_data(ttl=300)
-def fetch_live_data(ticker):
-    data = yf.download([ticker, "QQQ"], period="6mo", progress=False)
-    if data.empty or len(data) < 20: return None
-    
-    if isinstance(data.columns, pd.MultiIndex):
-        target_close = data['Close'][ticker].dropna()
-        qqq_close = data['Close']['QQQ'].dropna()
-    else:
-        target_close = data[ticker].dropna()
-        qqq_close = data['QQQ'].dropna()
-
-    today = datetime.now().strftime('%Y-%m-%d')
-    if target_close.index[-1].strftime('%Y-%m-%d') == today:
-        p_live, p1, p2 = float(target_close.iloc[-1]), float(target_close.iloc[-2]), float(target_close.iloc[-3])
-        qqq_for_rsi = qqq_close.iloc[:-1]
-    else:
-        p_live = p1 = float(target_close.iloc[-1])
-        p2 = float(target_close.iloc[-2])
-        qqq_for_rsi = qqq_close
-
-    delta = qqq_for_rsi.diff()
-    gain = delta.where(delta > 0, 0).ewm(alpha=1/14, adjust=False).mean()
-    loss = -delta.where(delta < 0, 0).ewm(alpha=1/14, adjust=False).mean()
-    rsi = 100 - (100 / (1 + (gain / loss.replace(0, np.nan))))
-    
-    return float(rsi.iloc[-1]), p1, p2, p_live
-
 @st.cache_data(ttl=3600)
-def get_backtest_data(ticker, start_date, end_date):
+def get_full_data(ticker, start_date):
+    """시작일부터 현재까지의 전체 데이터를 가져옴"""
     fetch_start = pd.to_datetime(start_date) - pd.DateOffset(months=6)
-    data = yf.download([ticker, "QQQ"], start=fetch_start, end=end_date, progress=False)
+    end_date = datetime.now() + timedelta(days=1)
+    data = yf.download([ticker, "QQQ"], start=fetch_start, end=end_date.strftime('%Y-%m-%d'), progress=False)
     if data.empty: return None
     
     if isinstance(data.columns, pd.MultiIndex):
@@ -57,6 +28,7 @@ def get_backtest_data(ticker, start_date, end_date):
     df['prev_close'] = df['close'].shift(1)
     df['prev_close2'] = df['close'].shift(2)
     
+    # QQQ 기반 RSI 계산
     delta = qqq_close.diff()
     gain = delta.where(delta > 0, 0)
     loss = -delta.where(delta < 0, 0)
@@ -67,120 +39,127 @@ def get_backtest_data(ticker, start_date, end_date):
     
     return df.loc[start_date:].dropna()
 
+def calculate_current_status(df, initial_seed):
+    """데이터를 돌며 현재 보유 수량, 평단가, 남은 현금, 채워진 슬롯 계산"""
+    cash = initial_seed
+    shares = 0
+    used_slots = 0
+    slot_cash = 0
+    avg_price = 0
+    
+    for date, row in df.iterrows():
+        p_prev1, p_prev2, curr_close, rsi_val = row['prev_close'], row['prev_close2'], row['close'], row['rsi']
+        
+        # x값 및 기준가 계산
+        x_raw = (p_prev1 + p_prev2) * 1.01 / 1.99
+        willow_x = np.ceil(x_raw * 100) / 100
+        
+        # 모드별 매수/매도 제한가
+        if rsi_val > 65: b_limit, s_limit = willow_x - 0.01, np.ceil((willow_x * 1.03) * 100) / 100
+        elif rsi_val > 45: b_limit, s_limit = willow_x - 0.01, willow_x
+        elif rsi_val > 30: b_limit, s_limit = np.floor((willow_x * 0.975) * 100) / 100, willow_x
+        else: b_limit, s_limit = np.floor((willow_x * 0.975) * 100) / 100, willow_x
+
+        # 1. 매도 체크
+        if shares > 0 and curr_close >= s_limit:
+            cash += (shares * curr_close)
+            shares, used_slots, slot_cash, avg_price = 0, 0, 0, 0
+        
+        # 2. 매수 체크
+        if used_slots < 5 and curr_close <= b_limit:
+            if used_slots == 0: 
+                slot_cash = cash / 5
+            if cash >= slot_cash:
+                buy_qty = slot_cash // curr_close
+                if buy_qty > 0:
+                    new_total_cost = (avg_price * shares) + (buy_qty * curr_close)
+                    shares += buy_qty
+                    avg_price = new_total_cost / shares
+                    cash -= (buy_qty * curr_close)
+                    used_slots += 1
+                    
+    return cash, shares, avg_price, used_slots
+
 # --- UI 레이아웃 ---
-st.title("🌿 사계절 전략 멀티 매니저")
+st.title("🌿 사계절 전략 자동 추적 매니저")
 
 with st.sidebar:
-    st.header("⚙️ 설정")
+    st.header("⚙️ 투자 설정")
     target_ticker = st.selectbox("대상 종목 선택", ["SOXL", "USD", "QLD"], index=0)
     
     st.divider()
-    user_name = st.text_input("사용자 이름", value="규원")
-    storage_key = f"seasons_{target_ticker}_{user_name}"
-    saved_data = localS.getItem(storage_key) or {"seed": 10000.0, "profit": 0.0, "slot": 0}
+    # 시작일을 입력받음
+    start_date = st.date_input("운용 시작일", value=datetime(2024, 1, 1))
+    init_seed = st.number_input("투자 원금 (USD)", value=10000.0, step=1000.0)
     
-    init_seed = st.number_input(f"초기 시드 (USD)", value=float(saved_data['seed']))
-    current_profit = st.number_input(f"누적 수익금 (USD)", value=float(saved_data['profit']))
-    current_slot = st.slider("현재 매수 완료 회차", 0, 5, int(saved_data['slot']))
+    st.divider()
+    st.caption("※ 시작일부터 현재까지의 매매 기록을 자동으로 시뮬레이션하여 현재 상태를 계산합니다.")
+
+# 데이터 로드 및 현재 상태 계산
+df_all = get_full_data(target_ticker, start_date.strftime('%Y-%m-%d'))
+
+if df_all is not None and not df_all.empty:
+    current_cash, current_shares, current_avg, current_slots = calculate_current_status(df_all, init_seed)
     
-    if st.button("💾 데이터 저장"):
-        localS.setItem(storage_key, {"seed": init_seed, "profit": current_profit, "slot": current_slot})
-        st.success(f"데이터 저장 완료!")
-
-tab1, tab2 = st.tabs([f"🎯 {target_ticker} 실시간 가이드", "📊 과거 백테스트"])
-
-# --- TAB 1: 실시간 가이드 ---
-with tab1:
-    res = fetch_live_data(target_ticker)
-    if res:
-        rsi, p1, p2, live = res
-        x_raw = (p1 + p2) * 1.01 / 1.99
-        willow_x = np.ceil(x_raw * 100) / 100
-        
-        if rsi > 65: mode, color, b_l, s_l = "Ivy", "red", willow_x - 0.01, np.ceil((willow_x * 1.03) * 100) / 100
-        elif rsi > 45: mode, color, b_l, s_l = "Willow", "orange", willow_x - 0.01, willow_x
-        elif rsi > 30: mode, color, b_l, s_l = "Lily", "blue", np.floor((willow_x * 0.975) * 100) / 100, willow_x
-        else: mode, color, b_l, s_l = "Tulip", "purple", np.floor((willow_x * 0.975) * 100) / 100, willow_x
-
-        st.markdown(f"### {target_ticker} 현재 모드: :{color}[{mode}]")
-        
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("QQQ RSI (지표)", f"{rsi:.2f}")
-        c2.metric("p1 (어제)", f"${p1:.2f}")
-        c3.metric("p2 (그저께)", f"${p2:.2f}")
-        c4.metric(f"현재가", f"${live:.2f}", delta=f"{live-p1:.2f}")
-
-        st.divider()
-        total_cap = init_seed + current_profit
-        one_slot = total_cap / 5
-        buy_qty = int(one_slot // b_l) if b_l > 0 else 0
-        
-        col_l, col_r = st.columns(2)
-        with col_l:
-            st.success(f"#### 📥 {current_slot + 1}회차 매수 (LOC)")
-            if current_slot < 5:
-                st.write(f"**매수 가격:** `${b_l:.2f}` 이하")
-                st.write(f"**매수 수량:** `{buy_qty}주` 권장")
-                st.caption(f"1슬롯 예산: ${one_slot:,.2f}")
-            else: st.write("✅ 모든 슬롯 체결 완료")
-        with col_r:
-            st.error("#### 📤 전량 매도 (LOC)")
-            st.write(f"**매도 가격:** `${s_l:.2f}` 이상")
-            st.write(f"**목표 수익:** {((s_l/willow_x)-1)*100:+.1f}% (x값 대비)")
-
-# --- TAB 2: 백테스트 ---
-with tab2:
-    st.header(f"📈 {target_ticker} 전략 성과 분석")
-    col_a, col_b, col_c = st.columns(3)
-    with col_a: b_start = st.date_input("시작일", value=datetime(2023, 1, 1))
-    with col_b: b_end = st.date_input("종료일", value=datetime.now())
-    with col_c: b_seed = st.number_input("테스트 시드 (USD)", value=10000, step=1000)
+    # 마지막 거래일 데이터 (오늘의 가이드를 위함)
+    last_row = df_all.iloc[-1]
+    rsi_now = last_row['rsi']
+    p1, p2 = last_row['prev_close'], last_row['prev_close2']
     
-    if st.button(f"🚀 {target_ticker} 백테스트 실행"):
-        df_back = get_backtest_data(target_ticker, b_start.strftime('%Y-%m-%d'), b_end.strftime('%Y-%m-%d'))
-        if df_back is not None:
-            cash, shares, used_slots, slot_cash = b_seed, 0, 0, 0
-            history = []
-            for date, row in df_back.iterrows():
-                p_prev1, p_prev2, curr_close, rsi_val = row['prev_close'], row['prev_close2'], row['close'], row['rsi']
-                x_raw = (p_prev1 + p_prev2) * 1.01 / 1.99
-                willow_x = np.ceil(x_raw * 100) / 100
-                if rsi_val > 65: b_limit, s_limit = willow_x - 0.01, np.ceil((willow_x * 1.03) * 100) / 100
-                elif rsi_val > 45: b_limit, s_limit = willow_x - 0.01, willow_x
-                elif rsi_val > 30: b_limit, s_limit = np.floor((willow_x * 0.975) * 100) / 100, willow_x
-                else: b_limit, s_limit = np.floor((willow_x * 0.975) * 100) / 100, willow_x
-                
-                sold_today = False
-                if shares > 0 and curr_close >= s_limit:
-                    cash += (shares * curr_close); shares, used_slots, slot_cash, sold_today = 0, 0, 0, True
-                if not sold_today and used_slots < 5 and curr_close <= b_limit:
-                    if used_slots == 0: slot_cash = cash / 5
-                    if cash >= slot_cash:
-                        buy_qty = slot_cash // curr_close
-                        shares += buy_qty; cash -= (buy_qty * curr_close); used_slots += 1
-                history.append({'Date': date, 'Total': cash + (shares * curr_close)})
-            
-            res_df = pd.DataFrame(history).set_index('Date')
-            final_val = res_df['Total'].iloc[-1]
-            total_ret, days = (final_val / b_seed - 1) * 100, (res_df.index[-1] - res_df.index[0]).days
-            cagr = ((final_val / b_seed) ** (365.25 / days) - 1) * 100
-            mdd = (res_df['Total'] / res_df['Total'].cummax() - 1).min() * 100
+    # 오늘의 타점 계산
+    x_raw = (p1 + p2) * 1.01 / 1.99
+    willow_x = np.ceil(x_raw * 100) / 100
+    
+    if rsi_now > 65: mode, color, b_l, s_l = "Ivy", "red", willow_x - 0.01, np.ceil((willow_x * 1.03) * 100) / 100
+    elif rsi_now > 45: mode, color, b_l, s_l = "Willow", "orange", willow_x - 0.01, willow_x
+    elif rsi_now > 30: mode, color, b_l, s_l = "Lily", "blue", np.floor((willow_x * 0.975) * 100) / 100, willow_x
+    else: mode, color, b_l, s_l = "Tulip", "purple", np.floor((willow_x * 0.975) * 100) / 100, willow_x
 
-            st.divider()
-            m1, m2, m3, m4 = st.columns(4)
-            m1.metric("최종 자산", f"${final_val:,.2f}")
-            m2.metric("총 수익률", f"{total_ret:,.2f}%")
-            m3.metric("CAGR", f"{cagr:.2f}%")
-            m4.metric("최대 낙폭(MDD)", f"{mdd:.2f}%")
-            
-            st.subheader("📅 연도별 성과 요약")
-            res_df['year'] = res_df.index.year
-            prev_v = b_seed
-            summary = []
-            for yr in res_df['year'].unique():
-                y_df_yr = res_df[res_df['year'] == yr]
-                y_e = y_df_yr['Total'].iloc[-1]
-                summary.append({'연도': yr, '수익률': f"{(y_e/prev_v-1)*100:.2f}%", 'MDD': f"{(y_df_yr['Total']/y_df_yr['Total'].cummax()-1).min()*100:.2f}%"})
-                prev_v = y_e
-            st.table(pd.DataFrame(summary))
-            st.line_chart(res_df['Total'])
+    # --- 상단 현재 포트폴리오 상태 ---
+    st.subheader(f"📊 현재 {target_ticker} 보유 현황")
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("보유 수량", f"{int(current_shares)} 주")
+    m2.metric("평균 단가", f"${current_avg:.2f}")
+    m3.metric("진행 회차", f"{current_slots} / 5 슬롯")
+    total_val = current_cash + (current_shares * last_row['close'])
+    m4.metric("현재 총 자산", f"${total_val:,.2f}", f"{(total_val/init_seed - 1)*100:.2f}%")
+
+    st.divider()
+
+    # --- 오늘의 매매 가이드 ---
+    st.markdown(f"### 🎯 오늘의 {target_ticker} 매매 가이드 (모드: :{color}[{mode}])")
+    
+    col_l, col_r = st.columns(2)
+    
+    with col_l:
+        st.success(f"#### 📥 {current_slots + 1}회차 매수 예약 (LOC)")
+        if current_slots < 5:
+            # 다음 매수 시 시드 재계산 (현재 자산 기준)
+            next_slot_cash = (current_cash + (current_shares * current_avg)) / 5
+            buy_qty = int(next_slot_cash // b_l)
+            st.write(f"**지정 가격:** `${b_l:.2f}` 이하")
+            st.write(f"**매수 수량:** `{buy_qty}주` 권장")
+        else:
+            st.write("✅ 모든 슬롯이 채워졌습니다. 매도 시점을 기다리세요.")
+
+    with col_r:
+        st.error("#### 📤 전량 매도 예약 (LOC)")
+        if current_shares > 0:
+            st.write(f"**지정 가격:** `${s_l:.2f}` 이상")
+            profit_rate = (s_l / current_avg - 1) * 100 if current_avg > 0 else 0
+            st.write(f"**매도 시 수익률:** `{profit_rate:+.2f}%` (평단 대비)")
+        else:
+            st.write("보유 수량이 없습니다.")
+
+    # --- 상세 지표 모니터링 ---
+    with st.expander("🔍 상세 지표 확인"):
+        c1, c2, c3 = st.columns(3)
+        c1.metric("QQQ RSI (지표)", f"{rsi_now:.2f}")
+        c2.metric("p1 (어제 종가)", f"${p1:.2f}")
+        c3.metric("p2 (그저께 종가)", f"${p2:.2f}")
+        st.write("현재까지의 자산 흐름:")
+        # 히스토리 계산을 위해 리런 로직은 생략하고 간단한 차트만 표시
+        st.line_chart(df_all['close'])
+
+else:
+    st.warning("데이터를 불러오지 못했습니다. 시작일이나 종목을 확인해주세요.")
