@@ -175,9 +175,7 @@ with tab2:
             res_back['year'] = res_back.index.year
             yearly = []
             temp_seed = s_seed
-            # QQQ 연도별 계산용
             qqq_prices = res_back['QQQ_Price']
-            temp_qqq_seed_price = qqq_prices.iloc[0]
 
             for yr in sorted(res_back['year'].unique()):
                 y_df = res_back[res_back['year'] == yr]
@@ -196,10 +194,9 @@ with tab2:
                     '연도': yr, 
                     '전략 수익률': f"{y_ret:.2f}%", 
                     'QQQ 수익률': f"{q_ret:.2f}%",
-                    '초과 수익(Alpha)': f"{y_ret - q_ret:+.2f}%",
                     '전략 MDD': f"{y_mdd:.2f}%"
                 })
                 temp_seed = y_end_val
             
-            st.subheader("📅 연도별 지수 비교 성과 요약")
+            st.subheader("📅 연도별 성과 요약 (전략 vs QQQ)")
             st.table(pd.DataFrame(yearly))
