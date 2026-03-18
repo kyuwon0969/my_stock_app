@@ -12,17 +12,6 @@ localS = LocalStorage()
 
 # --- 데이터 수집 함수 ---
 @st.cache_data(ttl=300)
-def fetch_exchange_rate():
-    """실시간 원/달러 환율 수집"""
-    try:
-        data = yf.download("KRW=X", period="1d", progress=False)
-        if not data.empty:
-            return float(data['Close'].iloc[-1])
-    except:
-        pass
-    return 1350.0  # 오류 시 기본값
-
-@st.cache_data(ttl=300)
 def fetch_live_data(ticker):
     data = yf.download([ticker, "QQQ"], period="6mo", progress=False)
     if data.empty or len(data) < 20: return None
@@ -81,9 +70,6 @@ def get_backtest_data(ticker, start_date, end_date):
 # --- UI 레이아웃 ---
 st.title("🌿 사계절 전략 멀티 매니저")
 
-# 환율 정보 가져오기
-exch_rate = fetch_exchange_rate()
-
 with st.sidebar:
     st.header("⚙️ 설정")
     target_ticker = st.selectbox("대상 종목 선택", ["SOXL", "USD", "QLD"], index=0)
@@ -100,9 +86,6 @@ with st.sidebar:
     if st.button("💾 데이터 저장"):
         localS.setItem(storage_key, {"seed": init_seed, "profit": current_profit, "slot": current_slot})
         st.success(f"데이터 저장 완료!")
-    
-    st.divider()
-    st.info(f"💵 실시간 환율: **{exch_rate:,.2f}원**")
 
 tab1, tab2 = st.tabs([f"🎯 {target_ticker} 실시간 가이드", "📊 과거 백테스트"])
 
@@ -123,13 +106,9 @@ with tab1:
         
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("QQQ RSI (지표)", f"{rsi:.2f}")
-        c2.metric("p1 (어제)", f"${p1:.2f}", f"{p1*exch_rate:,.0f}원")
-        c3.metric("p2 (그저께)", f"${p2:.2f}", f"{p2*exch_rate:,.0f}원")
-        
-        # 현재가 환율 0 오류 수정 및 화살표 제거 (delta_color="off")
-        live_krw = live * exch_rate
-        diff_krw = (live - p1) * exch_rate
-        c4.metric(f"현재가", f"${live:.2f}", f"{live_krw:,.0f}원", delta_color="off")
+        c2.metric("p1 (어제)", f"${p1:.2f}")
+        c3.metric("p2 (그저께)", f"${p2:.2f}")
+        c4.metric(f"현재가", f"${live:.2f}", delta=f"{live-p1:.2f}")
 
         st.divider()
         total_cap = init_seed + current_profit
@@ -140,16 +119,14 @@ with tab1:
         with col_l:
             st.success(f"#### 📥 {current_slot + 1}회차 매수 (LOC)")
             if current_slot < 5:
-                st.write(f"**달러:** `${b_l:.2f}` 이하")
-                st.write(f"**원화:** `약 {b_l*exch_rate:,.0f}원` 이하")
-                st.write(f"**수량:** `{buy_qty}주` 권장")
-                st.caption(f"1슬롯 예산: ${one_slot:,.2f} (약 {one_slot*exch_rate:,.0f}원)")
+                st.write(f"**매수 가격:** `${b_l:.2f}` 이하")
+                st.write(f"**매수 수량:** `{buy_qty}주` 권장")
+                st.caption(f"1슬롯 예산: ${one_slot:,.2f}")
             else: st.write("✅ 모든 슬롯 체결 완료")
         with col_r:
             st.error("#### 📤 전량 매도 (LOC)")
-            st.write(f"**달러:** `${s_l:.2f}` 이상")
-            st.write(f"**원화:** `약 {s_l*exch_rate:,.0f}원` 이상")
-            st.write(f"**목표 수익:** {((s_l/willow_x)-1)*100:+.1f}%")
+            st.write(f"**매도 가격:** `${s_l:.2f}` 이상")
+            st.write(f"**목표 수익:** {((s_l/willow_x)-1)*100:+.1f}% (x값 대비)")
 
 # --- TAB 2: 백테스트 ---
 with tab2:
@@ -172,6 +149,7 @@ with tab2:
                 elif rsi_val > 45: b_limit, s_limit = willow_x - 0.01, willow_x
                 elif rsi_val > 30: b_limit, s_limit = np.floor((willow_x * 0.975) * 100) / 100, willow_x
                 else: b_limit, s_limit = np.floor((willow_x * 0.975) * 100) / 100, willow_x
+                
                 sold_today = False
                 if shares > 0 and curr_close >= s_limit:
                     cash += (shares * curr_close); shares, used_slots, slot_cash, sold_today = 0, 0, 0, True
@@ -190,7 +168,7 @@ with tab2:
 
             st.divider()
             m1, m2, m3, m4 = st.columns(4)
-            m1.metric("최종 자산", f"${final_val:,.2f}", f"{final_val*exch_rate:,.0f}원", delta_color="off")
+            m1.metric("최종 자산", f"${final_val:,.2f}")
             m2.metric("총 수익률", f"{total_ret:,.2f}%")
             m3.metric("CAGR", f"{cagr:.2f}%")
             m4.metric("최대 낙폭(MDD)", f"{mdd:.2f}%")
@@ -200,9 +178,9 @@ with tab2:
             prev_v = b_seed
             summary = []
             for yr in res_df['year'].unique():
-                y_d = res_df[res_df['year'] == yr]
-                y_e = y_d['Total'].iloc[-1]
-                summary.append({'연도': yr, '수익률': f"{(y_e/prev_v-1)*100:.2f}%", 'MDD': f"{(y_d['Total']/y_d['Total'].cummax()-1).min()*100:.2f}%"})
+                y_df_yr = res_df[res_df['year'] == yr]
+                y_e = y_df_yr['Total'].iloc[-1]
+                summary.append({'연도': yr, '수익률': f"{(y_e/prev_v-1)*100:.2f}%", 'MDD': f"{(y_df_yr['Total']/y_df_yr['Total'].cummax()-1).min()*100:.2f}%"})
                 prev_v = y_e
             st.table(pd.DataFrame(summary))
             st.line_chart(res_df['Total'])
