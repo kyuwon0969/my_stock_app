@@ -6,16 +6,16 @@ from datetime import datetime, timedelta
 from streamlit_local_storage import LocalStorage
 
 # 1. 페이지 설정
-st.set_page_config(page_title="사계절 전략 [이평선 실험]", page_icon="📈", layout="wide")
+st.set_page_config(page_title="사계절 전략 [5/20 이평선 실험]", page_icon="📈", layout="wide")
 
 localS = LocalStorage()
 
-# --- 데이터 엔진 (이평선 계산 추가) ---
+# --- 데이터 엔진 (5일/20일 이평선으로 변경) ---
 @st.cache_data(ttl=600)
 def get_processed_data(ticker, start_date):
     try:
-        # 이평선(60일) 계산 예열을 위해 시작일 1년 전부터 수집
-        fetch_start = pd.to_datetime(start_date) - pd.DateOffset(years=1)
+        # 이평선(20일) 계산 예열을 위해 시작일 6개월 전부터 수집
+        fetch_start = pd.to_datetime(start_date) - pd.DateOffset(months=6)
         data = yf.download([ticker, "QQQ"], start=fetch_start, progress=False)
         
         if data.empty: return None
@@ -33,9 +33,9 @@ def get_processed_data(ticker, start_date):
         df['prev_close'] = df['close'].shift(1)
         df['prev_close2'] = df['close'].shift(2)
         
-        # [실험] QQQ 기준 20일, 60일 이동평균선 (전일 종가 기준 판정)
+        # [실험] QQQ 기준 5일, 20일 이동평균선 (단기 추세 판정)
+        df['sma5'] = qqq_close.rolling(window=5).mean().shift(1)
         df['sma20'] = qqq_close.rolling(window=20).mean().shift(1)
-        df['sma60'] = qqq_close.rolling(window=60).mean().shift(1)
         
         return df.loc[start_date:].dropna()
     except Exception as e:
@@ -43,7 +43,7 @@ def get_processed_data(ticker, start_date):
         return None
 
 def run_simulation(df, initial_seed, num_slots):
-    """이평선 크로스 기반 시뮬레이션 엔진"""
+    """5/20 이평선 크로스 기반 시뮬레이션 엔진"""
     if df is None or df.empty: return pd.DataFrame()
     
     cash, shares, used_slots, slot_cash, avg_price = float(initial_seed), 0.0, 0, 0.0, 0.0
@@ -52,19 +52,19 @@ def run_simulation(df, initial_seed, num_slots):
     
     for date, row in df.iterrows():
         p_prev1, p_prev2, curr_close, qqq_curr_close = row['prev_close'], row['prev_close2'], row['close'], row['qqq_close']
-        sma20, sma60 = row['sma20'], row['sma60']
+        sma5, sma20 = row['sma5'], row['sma20']
         
         x_raw = (p_prev1 + p_prev2) * 1.01 / 1.99
         willow_x = np.ceil(x_raw * 100) / 100
         
-        # [실험 판정] 골든크로스 vs 데드크로스
-        is_golden = sma20 > sma60
+        # [실험 판정] 5일선이 20일선 위에 있으면 강세 모드
+        is_strong = sma5 > sma20
         
-        if is_golden:
-            # 강세장: 타점을 높게 잡고 공격적 매도 (Ivy/Willow 성격)
+        if is_strong:
+            # 단기 강세: 적극 매수 타점
             b_limit, s_limit = willow_x - 0.01, willow_x
         else:
-            # 약세장: 타점을 낮게 잡고 보수적 매수 (Lily/Tulip 성격)
+            # 단기 약세: 보수적 매수 타점 (더 싸게 사기)
             b_limit, s_limit = np.floor((willow_x * 0.975) * 100) / 100, willow_x
 
         sold_today = False
@@ -95,9 +95,9 @@ def run_simulation(df, initial_seed, num_slots):
 
 # --- UI 레이아웃 ---
 with st.sidebar:
-    st.header("⚙️ 실험: 이평선 크로스 설정")
+    st.header("⚙️ 실험: 5/20 이평선 설정")
     target_ticker = st.selectbox("대상 종목 선택", ["SOXL", "USD"], index=0)
-    config_key = f"seasons_exp_config_{target_ticker}"
+    config_key = f"seasons_exp_520_config_{target_ticker}"
     saved_config = localS.getItem(config_key) or {"op_start": "2024-01-01", "init_seed": 10000.0, "num_slots": 5}
     
     num_slots = st.select_slider("매수 슬롯 분할 수", options=[3, 4, 5, 6], value=int(saved_config.get('num_slots', 5)))
@@ -106,7 +106,7 @@ with st.sidebar:
     
     if st.button("💾 실험 설정 저장"):
         localS.setItem(config_key, {"op_start": op_start.strftime('%Y-%m-%d'), "init_seed": init_seed, "num_slots": num_slots})
-        st.success("설정값 저장 완료!")
+        st.success("5/20 이평선 설정 저장!")
     if st.button("🔄 강제 새로고침"):
         st.cache_data.clear()
         st.rerun()
@@ -120,12 +120,12 @@ with tab1:
         hist_live = run_simulation(df_live, init_seed, num_slots)
         cur, last = hist_live.iloc[-1], df_live.iloc[-1]
         
-        is_golden = last['sma20'] > last['sma60']
-        mode_text = "🚀 강세 (골든크로스)" if is_golden else "🛡️ 약세 (데드크로스)"
-        mode_color = "red" if is_golden else "blue"
+        is_strong = last['sma5'] > last['sma20']
+        mode_text = "🔥 단기 강세 (5/20 골든)" if is_strong else "❄️ 단기 약세 (5/20 데드)"
+        mode_color = "red" if is_strong else "blue"
 
         st.subheader(f"📊 {target_ticker} 현황 | 모드: :{mode_color}[{mode_text}]")
-        st.write(f"현재 QQQ 20일선: `${last['sma20']:.2f}` | 60일선: `${last['sma60']:.2f}`")
+        st.write(f"현재 QQQ 5일선: `${last['sma5']:.2f}` | 20일선: `${last['sma20']:.2f}`")
         
         m1, m2, m3, m4 = st.columns(4)
         total_ret, qqq_ret = (cur['Total'] / init_seed - 1) * 100, (cur['QQQ_Hold'] / init_seed - 1) * 100
@@ -139,11 +139,11 @@ with tab1:
 
 # --- TAB 2: 백테스트 ---
 with tab2:
-    st.header(f"🔍 {num_slots}슬롯 이평선 크로스 성과 분석")
+    st.header(f"🔍 {num_slots}슬롯 5/20 이평선 성과 분석")
     c1, c2, c3 = st.columns(3)
-    with c1: s_date = st.date_input("테스트 시작일", value=datetime(2013, 1, 1), min_value=datetime(2013, 1, 1), key="exp_bt_s")
-    with c2: e_date = st.date_input("테스트 종료일", value=datetime.now(), key="exp_bt_e")
-    with c3: s_seed = st.number_input("테스트 시드", value=10000.0, step=1000.0, key="exp_bt_seed")
+    with c1: s_date = st.date_input("테스트 시작일", value=datetime(2013, 1, 1), key="exp_bt_s_520")
+    with c2: e_date = st.date_input("테스트 종료일", value=datetime.now(), key="exp_bt_e_520")
+    with c3: s_seed = st.number_input("테스트 시드", value=10000.0, step=1000.0, key="exp_bt_seed_520")
 
     if st.button("🚀 백테스트 실행"):
         df_back = get_processed_data(target_ticker, s_date.strftime('%Y-%m-%d'))
@@ -174,15 +174,13 @@ with tab2:
                 for yr in sorted(res_back['year'].unique()):
                     y_df = res_back[res_back['year'] == yr]
                     y_e_v = y_df['Total'].iloc[-1]
-                    
-                    q_start_p = df_back['qqq_close'][df_back.index.year == yr].iloc[0]
-                    q_end_p = df_back['qqq_close'][df_back.index.year == yr].iloc[-1]
-                    q_r_y = (q_end_p / q_start_p - 1) * 100
+                    q_p = df_back['qqq_close'][df_back.index.year == yr]
+                    q_r_y = (q_p.iloc[-1] / q_p.iloc[0] - 1) * 100
                     
                     yearly_data.append({
                         '연도': yr, '전략 수익률': f"{(y_e_v/temp_seed-1)*100:.2f}%",
                         'QQQ 수익률': f"{q_r_y:.2f}%", '전략 MDD': f"{(y_df['Total']/y_df['Total'].cummax()-1).min()*100:.2f}%"
                     })
                     temp_seed = y_e_v
-                st.subheader("📅 연도별 성과 요약 (이평선 실험)")
+                st.subheader("📅 연도별 성과 요약 (5/20 이평선)")
                 st.table(pd.DataFrame(yearly_data))
