@@ -182,7 +182,7 @@ with tab1:
 with tab2:
     st.header(f"🔍 {num_slots}슬롯 Ivy 저축(BOXX 이자) 백테스트")
     c1, c2, c3 = st.columns(3)
-    with c1: s_date = st.date_input("테스트 시작일", value=datetime(2011, 1, 1), key="bt_s")
+    with c1: s_date = st.date_input("테스트 시작일", value=datetime(2013, 1, 1), key="bt_s")
     with c2: e_date = st.date_input("테스트 종료일", value=datetime.now(), key="bt_e")
     with c3: s_seed = st.number_input("테스트 시드", value=10000.0, step=1000.0, key="bt_seed")
 
