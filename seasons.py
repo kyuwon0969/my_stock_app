@@ -2,11 +2,13 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import numpy as np
-from datetime import datetime, timedelta
+import matplotlib.pyplot as plt
+from scipy.stats import norm, skew, kurtosis
+from datetime import datetime
 from streamlit_local_storage import LocalStorage
 
 # 1. 페이지 설정
-st.set_page_config(page_title="사계절 전략 매니저", page_icon="🌿", layout="wide")
+st.set_page_config(page_title="사계절 전략 매니저 V3", page_icon="🌿", layout="wide")
 
 localS = LocalStorage()
 
@@ -22,15 +24,11 @@ def get_processed_data(ticker, start_date):
             target_close = data['Close'][ticker].ffill()
             qqq_close = data['Close']['QQQ'].ffill()
         else:
-            target_close = data['Close'].ffill()
-            qqq_close = data['Close'].ffill()
+            target_close, qqq_close = data['Close'].ffill(), data['Close'].ffill()
             
         df = pd.DataFrame(index=target_close.index)
-        df['close'] = target_close
-        df['qqq_close'] = qqq_close
-        # 가이드 표기 및 x값 계산을 위한 데이터
-        df['p1_c'] = df['close'].shift(1)
-        df['p2_c'] = df['close'].shift(2)
+        df['close'], df['qqq_close'] = target_close, qqq_close
+        df['p1_c'], df['p2_c'] = df['close'].shift(1), df['close'].shift(2)
         
         delta = qqq_close.diff()
         gain = delta.where(delta > 0, 0).ewm(alpha=1/14, adjust=False).mean()
@@ -42,156 +40,162 @@ def get_processed_data(ticker, start_date):
         st.error(f"⚠️ 데이터 엔진 오류: {e}")
         return None
 
+# --- 시뮬레이션 엔진 (정량 매수 적용) ---
 def run_simulation(df, initial_seed, num_slots):
-    """Ivy 수익 저축 & BOXX 운용 & 슬롯별 상세 내역 추적 엔진"""
+    """정량 매수 로직: 주문 시점(타점) 가격으로 수량을 고정하고 종가에 체결"""
     if df is None or df.empty: return pd.DataFrame(), []
     
     cash, shares, used_slots, slot_cash, avg_price = float(initial_seed), 0.0, 0, 0.0, 0.0
     ivy_reserve = 0.0  
-    boxx_rate = (1 + 0.053) ** (1/252) - 1 # 연 5.3% 일복리
+    boxx_rate = (1 + 0.053) ** (1/252) - 1 
     
-    history = []
-    slot_details = [] # 현재 보유 중인 슬롯들의 상세 리스트
-    qqq_start_price = float(df['qqq_close'].iloc[0])
+    history, slot_details = [], []
+    qqq_start_p = float(df['qqq_close'].iloc[0])
     
     for date, row in df.iterrows():
-        # BOXX 이자 정산
-        if ivy_reserve > 0:
-            ivy_reserve *= (1 + boxx_rate)
+        if ivy_reserve > 0: ivy_reserve *= (1 + boxx_rate)
             
-        p1, p2 = row['p1_c'], row['p2_c']
-        curr_close, qqq_curr_close, rsi_val = row['close'], row['qqq_close'], row['rsi']
+        p1, p2, curr_c, rsi_v = row['p1_c'], row['p2_c'], row['close'], row['rsi']
+        x = np.ceil(((p1 + p2) * 1.01 / 1.99) * 100) / 100
         
-        x_raw = (p1 + p2) * 1.01 / 1.99
-        willow_x = np.ceil(x_raw * 100) / 100
-        
-        # 모드 및 타점 설정
-        if rsi_val > 65: mode = "Ivy"; b_limit, s_limit = willow_x - 0.01, np.ceil((willow_x * 1.03) * 100) / 100
-        elif rsi_val > 45: mode = "Willow"; b_limit, s_limit = willow_x - 0.01, willow_x
-        elif rsi_val > 30: mode = "Lily"; b_limit, s_limit = np.floor((willow_x * 0.975) * 100) / 100, willow_x
-        else: mode = "Tulip"; b_limit, s_limit = np.floor((willow_x * 0.975) * 100) / 100, willow_x
+        # 모드별 타점 설정
+        if rsi_v > 65: mode, b_l, s_l = "Ivy", x - 0.01, np.ceil((x * 1.03) * 100) / 100
+        elif rsi_v > 45: mode, b_l, s_l = "Willow", x - 0.01, x
+        elif rsi_v > 30: mode, b_l, s_l = "Lily", np.floor((x * 0.975) * 100) / 100, x
+        else: mode, b_l, s_l = "Tulip", np.floor((x * 0.975) * 100) / 100, x
 
-        sold_today = False
-        # 매도 로직
-        if shares > 0 and curr_close >= s_limit:
-            sell_proceeds = shares * curr_close
-            profit = sell_proceeds - (avg_price * shares)
+        sold = False
+        if shares > 0 and curr_c >= s_l:
+            profit = (shares * curr_c) - (avg_price * shares)
             if mode == "Ivy" and profit > 0:
                 cash += (avg_price * shares); ivy_reserve += profit        
-            else:
-                cash += sell_proceeds        
-            shares, used_slots, slot_cash, avg_price = 0.0, 0, 0.0, 0.0
-            slot_details = [] # 매도 시 상세내역 초기화
-            sold_today = True
+            else: cash += (shares * curr_c)
+            shares, used_slots, slot_cash, avg_price, slot_details = 0.0, 0, 0.0, 0.0, []
+            sold = True
         
-        # Tulip 진입 시 비상금 투입
         if used_slots == 0 and mode == "Tulip" and ivy_reserve > 0:
             cash += ivy_reserve; ivy_reserve = 0.0
             
-        # 매수 로직
-        if not sold_today and used_slots < num_slots and curr_close <= b_limit:
+        # [핵심] 정량 매수 로직 (타점 b_l 기준으로 수량 확정)
+        if not sold and used_slots < num_slots and curr_c <= b_l:
             if used_slots == 0: slot_cash = cash / num_slots
-            buy_qty = slot_cash // curr_close
-            if buy_qty > 0 and cash >= (buy_qty * curr_close):
-                # 슬롯 상세 기록
+            
+            # 수량은 주문을 걸었던 타점(b_l) 기준으로 미리 계산 (정량)
+            buy_qty = slot_cash // b_l 
+            # 실제 지불은 유리한 종가(curr_c)로 정산
+            actual_cost = buy_qty * curr_c
+            
+            if buy_qty > 0 and cash >= actual_cost:
                 slot_details.append({
-                    "슬롯": len(slot_details) + 1,
-                    "날짜": date.strftime('%Y-%m-%d'),
-                    "매수가": round(float(curr_close), 2),
-                    "수량": int(buy_qty),
-                    "금액": round(float(buy_qty * curr_close), 2)
+                    "슬롯": len(slot_details) + 1, "날짜": date.strftime('%Y-%m-%d'),
+                    "매수가(종가)": round(float(curr_c), 2), "기준가(타점)": round(float(b_l), 2),
+                    "수량": int(buy_qty), "금액": round(float(actual_cost), 2)
                 })
-                avg_price = ((avg_price * shares) + (buy_qty * curr_close)) / (shares + buy_qty)
-                shares += buy_qty
-                cash -= (buy_qty * curr_close)
-                used_slots += 1
+                avg_price = ((avg_price * shares) + actual_cost) / (shares + buy_qty)
+                shares += buy_qty; cash -= actual_cost; used_slots += 1
         
-        total_assets = cash + (shares * curr_close) + ivy_reserve
         history.append({
-            'Date': date, 'Total': float(total_assets), 'Ivy_Reserve': float(ivy_reserve), 
-            'Cash': float(cash), 'Shares': float(shares), 'Slots': int(used_slots), 
-            'Avg_Price': float(avg_price), 'Slot_Cash': float(slot_cash),
-            'QQQ_Hold': (initial_seed / qqq_start_price) * qqq_curr_close
+            'Date': date, 'Total': cash + (shares * curr_c) + ivy_reserve,
+            'Ivy': ivy_reserve, 'Cash': cash, 'Shares': shares, 'Slots': used_slots, 
+            'Avg': avg_price, 'QQQ': (initial_seed / qqq_start_p) * row['qqq_close']
         })
-                    
     return pd.DataFrame(history).set_index('Date'), slot_details
+
+# --- 리스크 분석 엔진 ---
+def analyze_metrics(df_res, seed):
+    rets = df_res['Total'].pct_change().dropna()
+    ann_ret = (df_res['Total'].iloc[-1] / seed) ** (252 / len(df_res)) - 1
+    
+    rf_daily = (1 + 0.053)**(1/252) - 1
+    excess = rets - rf_daily
+    sharpe = np.sqrt(252) * excess.mean() / rets.std()
+    sortino = np.sqrt(252) * excess.mean() / rets[rets < 0].std()
+    
+    peak = df_res['Total'].cummax()
+    dd = (df_res['Total'] - peak) / peak
+    mdd = dd.min()
+    
+    # DSR (비교군 10개 보정)
+    T, sk, kr = len(rets), skew(rets), kurtosis(rets)
+    sigma_sr = np.sqrt((1 + 0.5 * sk**2 + (kr-3)/4 * sharpe**2) / (T-1))
+    dsr = norm.cdf((sharpe - np.sqrt(2 * np.log(10))) / sigma_sr)
+
+    return {"CAGR": ann_ret*100, "Sharpe": sharpe, "Sortino": sortino, "MDD": mdd*100, "DSR": dsr}
 
 # --- UI 레이아웃 ---
 with st.sidebar:
-    st.header("⚙️ 전략 및 운용 설정")
-    target_ticker = st.selectbox("대상 종목 선택", ["SOXL", "USD"], index=0)
-    config_key = f"seasons_final_{target_ticker}"
+    st.header("⚙️ 운용 설정")
+    target_ticker = st.selectbox("종목", ["SOXL", "USD"], index=0)
+    config_key = f"v3_{target_ticker}"
     saved = localS.getItem(config_key) or {"op_start": "2024-01-01", "init_seed": 10000.0, "num_slots": 5}
-    
-    num_slots = st.select_slider("매수 슬롯 분할 수", options=[3, 4, 5, 6], value=int(saved.get('num_slots', 5)))
-    op_start = st.date_input("실제 운용 시작일", value=pd.to_datetime(saved['op_start']))
-    init_seed = st.number_input("투자 원금 (USD)", value=float(saved['init_seed']), step=1000.0)
-    
-    if st.button("💾 설정값 저장"):
+    num_slots = st.select_slider("슬롯", options=[3, 4, 5, 6], value=int(saved.get('num_slots', 5)))
+    op_start = st.date_input("시작일", value=pd.to_datetime(saved['op_start']))
+    init_seed = st.number_input("원금", value=float(saved['init_seed']), step=1000.0)
+    if st.button("💾 저장"):
         localS.setItem(config_key, {"op_start": op_start.strftime('%Y-%m-%d'), "init_seed": init_seed, "num_slots": num_slots})
         st.success("저장 완료!")
-    if st.button("🔄 강제 새로고침"):
-        st.cache_data.clear()
-        st.rerun()
 
-tab1, tab2 = st.tabs(["🎯 실시간 추적 & 가이드", "📊 과거 백테스트 리포트"])
+tab1, tab2 = st.tabs(["🎯 실전 가이드", "📊 전문 리포트"])
 
 with tab1:
     df_live = get_processed_data(target_ticker, op_start.strftime('%Y-%m-%d'))
     if df_live is not None and not df_live.empty:
-        hist_live, current_slots = run_simulation(df_live, init_seed, num_slots)
-        cur, last = hist_live.iloc[-1], df_live.iloc[-1]
+        res_live, slots_live = run_simulation(df_live, init_seed, num_slots)
+        cur, last = res_live.iloc[-1], df_live.iloc[-1]
         
-        # 1. 상단 현황판
-        st.subheader(f"📊 {target_ticker} 운용 현황")
+        st.subheader(f"📊 {target_ticker} 현황")
         m1, m2, m3, m4 = st.columns(4)
         m1.metric("수익률", f"{(cur['Total']/init_seed-1)*100:+.2f}%")
-        m2.metric("평균단가", f"${cur['Avg_Price']:.2f}")
-        m3.metric("진행 회차", f"{int(cur['Slots'])} / {num_slots} 슬롯")
-        m4.metric("현재 총 자산", f"${cur['Total']:,.2f}")
-        
-        st.info(f"🏦 현재 Ivy 비상금(BOXX) 저축액: **${cur['Ivy_Reserve']:,.2f}**")
+        m2.metric("평균단가", f"${cur['Avg']:.2f}")
+        m3.metric("진행슬롯", f"{int(cur['Slots'])} / {num_slots}")
+        m4.metric("총 자산", f"${cur['Total']:,.2f}")
 
-        # 2. 보유 슬롯 상세 표 (요청 기능)
-        if current_slots:
-            st.markdown("#### 📝 현재 보유 슬롯 상세 내역")
-            st.table(pd.DataFrame(current_slots))
-        else:
-            st.info("현재 보유 중인 물량이 없습니다.")
+        if slots_live:
+            st.markdown("#### 📝 보유 슬롯 상세 (정량 매수 결과)")
+            st.table(pd.DataFrame(slots_live))
 
-        # 3. 실전 주문 가이드 (데이터 포함)
         st.divider()
-        rsi_now, p1, p2 = last['rsi'], last['p1_c'], last['p2_c']
+        rsi_n, p1, p2 = last['rsi'], last['p1_c'], last['p2_c']
         x = np.ceil(((p1 + p2) * 1.01 / 1.99) * 100) / 100
-        
-        st.markdown(f"### 🎯 오늘의 실전 주문 가이드")
-        st.write(f"🔍 **판단 근거:** QQQ RSI `{rsi_now:.2f}` | p1 `${p1:.2f}` | p2 `${p2:.2f}`")
+        st.write(f"🔍 **판단근거:** RSI `{rsi_n:.2f}` | p1 `${p1:.2f}` | p2 `${p2:.2f}`")
         
         cl, cr = st.columns(2)
         with cl:
-            st.success(f"#### 📥 {int(cur['Slots']) + 1}회차 매수 (LOC)")
-            if int(cur['Slots']) < num_slots:
-                target_slot_cash = cur['Cash'] / (num_slots - int(cur['Slots'])) if int(cur['Slots']) == 0 else cur['Slot_Cash']
-                st.write(f"가격: `${x-0.01:.2f}` 이하 | 권장수량: `{int(target_slot_cash // (x-0.01))} 주`")
-            else: st.write("✅ 풀매수 완료")
+            st.success(f"#### 📥 {int(cur['Slots'])+1}회차 매수")
+            if cur['Slots'] < num_slots:
+                b_price = x - 0.01 if rsi_n > 45 else np.floor((x * 0.975) * 100) / 100
+                t_cash = cur['Cash'] / (num_slots - cur['Slots']) if cur['Slots'] == 0 else (cur['Total']/num_slots) # 유연한 계산
+                st.write(f"타점: `${b_price:.2f}` (LOC)")
+                st.write(f"수량: `{int(t_cash // b_price)} 주` (정량 고정)")
+            else: st.write("✅ 풀매수")
         with cr:
-            # 모드에 따른 매도 타점 표시
-            s_price = np.ceil((x * 1.03) * 100) / 100 if rsi_now > 65 else x
-            st.error("#### 📤 전량 매도 (LOC)")
-            if cur['Shares'] > 0:
-                st.write(f"가격: `${s_price:.2f}` 이상 | 수량: `{int(cur['Shares'])} 주`")
-            else: st.write("보유 물량 없음")
-            
-        st.line_chart(hist_live[['Total', 'QQQ_Hold']])
+            s_price = np.ceil((x * 1.03) * 100) / 100 if rsi_n > 65 else x
+            st.error("#### 📤 전량 매도")
+            if cur['Shares'] > 0: st.write(f"가격: `${s_price:.2f}` (LOC) | `{int(cur['Shares'])} 주`")
+            else: st.write("보유 없음")
+        st.line_chart(res_live[['Total', 'QQQ']])
 
 with tab2:
-    st.header("📊 과거 백테스트 리포트")
-    # 백테스트 탭에서도 동일한 시뮬레이션 엔진을 사용하여 일관성을 유지합니다.
-    if st.button("🚀 13년 백테스트 실행"):
+    if st.button("🚀 13년 전문 백테스트 실행"):
         df_back = get_processed_data(target_ticker, "2013-01-01")
         if df_back is not None:
-            hist_back, _ = run_simulation(df_back, init_seed, num_slots)
-            # (수익률, MDD 등 분석 지표 출력 로직 포함...)
-            f_v = hist_back['Total'].iloc[-1]
-            st.write(f"최종 자산: ${f_v:,.2f} | 수익률: {(f_v/init_seed-1)*100:.2f}%")
-            st.line_chart(hist_back['Total'])
+            res_b, _ = run_simulation(df_back, init_seed, num_slots)
+            m = analyze_metrics(res_b, init_seed)
+            st.divider()
+            c1, c2, c3, c4, c5 = st.columns(5)
+            c1.metric("CAGR", f"{m['CAGR']:.2f}%")
+            c2.metric("MDD", f"{m['MDD']:.2f}%")
+            c3.metric("Sharpe", f"{m['Sharpe']:.3f}")
+            c4.metric("Sortino", f"{m['Sortino']:.3f}")
+            c5.metric("DSR", f"{m['DSR']:.4f}")
+            st.line_chart(res_b[['Total', 'QQQ']])
+            
+            res_b['year'] = res_b.index.year
+            y_data, t_seed = [], init_seed
+            for yr in sorted(res_b['year'].unique()):
+                y_df = res_b[res_b['year'] == yr]
+                y_v = y_df['Total'].iloc[-1]
+                y_m = (y_df['Total'] / y_df['Total'].cummax() - 1).min() * 100
+                y_data.append({'연도': yr, '수익률': f"{(y_v/t_seed-1)*100:.2f}%", 'MDD': f"{y_m:.2f}%"})
+                t_seed = y_v
+            st.table(pd.DataFrame(y_data))
