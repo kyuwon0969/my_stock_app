@@ -15,7 +15,7 @@ localS = LocalStorage()
 @st.cache_data(ttl=300)
 def get_processed_data(ticker, start_date):
     try:
-        # 넉넉하게 6개월 전부터 데이터 수집 (RSI 및 p1, p2 계산용)
+        # 가이드 및 x값 계산을 위해 입력된 시작일보다 6개월 전부터 수집
         fetch_start = pd.to_datetime(start_date) - pd.DateOffset(months=6)
         data = yf.download([ticker, "QQQ"], start=fetch_start, progress=False)
         if data.empty: return None
@@ -41,19 +41,22 @@ def get_processed_data(ticker, start_date):
         st.error(f"⚠️ 데이터 엔진 오류: {e}")
         return None
 
-# --- 시뮬레이션 엔진 (정량 매수 + 장중 데이터 제외 + BOXX 이자) ---
-def run_simulation(df, initial_seed, num_slots, end_limit_date=None):
+# --- 시뮬레이션 엔진 (정량 매수 + BOXX 이자) ---
+def run_simulation(df, initial_seed, num_slots, start_limit_date=None, end_limit_date=None):
     if df is None or df.empty: return pd.DataFrame(), []
     
-    # 장중 데이터로 인한 슬롯 왜곡 방지 (시뮬레이션은 어제까지만)
+    # [핵심] 사용자가 설정한 시작 날짜와 종료 날짜(오늘 제외)로 필터링
+    sim_df = df.copy()
+    if start_limit_date:
+        sim_df = sim_df[sim_df.index.date >= start_limit_date]
     if end_limit_date:
-        sim_df = df[df.index.date < end_limit_date]
-    else:
-        sim_df = df
+        sim_df = sim_df[sim_df.index.date < end_limit_date]
+
+    if sim_df.empty: return pd.DataFrame(), []
 
     cash, shares, used_slots, slot_cash, avg_price = float(initial_seed), 0.0, 0, 0.0, 0.0
     ivy_reserve = 0.0
-    boxx_rate = (1 + 0.053) ** (1/252) - 1 # 연 5.3% 일복리
+    boxx_rate = (1 + 0.053) ** (1/252) - 1 
     
     history, slot_details = [], []
     qqq_start_p = float(sim_df['qqq_close'].iloc[0])
@@ -64,13 +67,13 @@ def run_simulation(df, initial_seed, num_slots, end_limit_date=None):
         p1, p2, curr_c, rsi_v = row['p1_c'], row['p2_c'], row['close'], row['rsi']
         x = np.ceil(((p1 + p2) * 1.01 / 1.99) * 100) / 100
         
-        # 모드 판정 및 타점 설정
+        # 모드 및 타점 설정
         if rsi_v > 65: mode, b_l, s_l = "Ivy", x - 0.01, np.ceil((x * 1.03) * 100) / 100
         elif rsi_v > 45: mode, b_l, s_l = "Willow", x - 0.01, x
         elif rsi_v > 30: mode, b_l, s_l = "Lily", np.floor((x * 0.975) * 100) / 100, x
         else: mode, b_l, s_l = "Tulip", np.floor((x * 0.975) * 100) / 100, x
 
-        # 1. 매도 로직
+        # 매도
         sold = False
         if shares > 0 and curr_c >= s_l:
             profit = (shares * curr_c) - (avg_price * shares)
@@ -80,11 +83,10 @@ def run_simulation(df, initial_seed, num_slots, end_limit_date=None):
             shares, used_slots, slot_cash, avg_price, slot_details = 0.0, 0, 0.0, 0.0, []
             sold = True
         
-        # 2. Tulip 진입 시 비상금 투입
         if used_slots == 0 and mode == "Tulip" and ivy_reserve > 0:
             cash += ivy_reserve; ivy_reserve = 0.0
             
-        # 3. 매수 로직 (정량 매수: 타점 기준 수량 확정)
+        # 매수 (정량 로직)
         if not sold and used_slots < num_slots and curr_c <= b_l:
             if used_slots == 0: slot_cash = cash / num_slots
             buy_qty = slot_cash // b_l 
@@ -110,8 +112,7 @@ with st.sidebar:
     st.header("⚙️ 운용 설정")
     target_ticker = st.selectbox("종목 선택", ["SOXL", "USD"], index=0)
     
-    # [복구] 저장된 설정값 불러오기
-    config_key = f"seasons_pro_v4_{target_ticker}"
+    config_key = f"v4_5_sync_{target_ticker}"
     saved = localS.getItem(config_key) or {"op_start": "2024-01-01", "init_seed": 10000.0, "num_slots": 5}
     
     num_slots = st.select_slider("슬롯 분할 수", options=[3, 4, 5, 6], value=int(saved.get('num_slots', 5)))
@@ -124,9 +125,7 @@ with st.sidebar:
             "init_seed": init_seed, 
             "num_slots": num_slots
         })
-        st.success("설정이 브라우저에 저장되었습니다!")
-    st.divider()
-    st.info("💡 장중 데이터는 슬롯 계산에서 자동 제외됩니다.")
+        st.success("설정이 저장되었습니다!")
 
 tab1, tab2 = st.tabs(["🎯 실시간 현황 & 가이드", "📊 과거 데이터 기반 백테스트"])
 
@@ -135,12 +134,12 @@ with tab1:
     raw_df = get_processed_data(target_ticker, op_start.strftime('%Y-%m-%d'))
     if raw_df is not None:
         today_val = date.today()
-        # 오늘 데이터를 제외하고 어제까지의 확정 슬롯 계산
-        res_live, slots_live = run_simulation(raw_df, init_seed, num_slots, end_limit_date=today_val)
+        # [수정] 시작 날짜(op_start)와 원금(init_seed)을 동적으로 반영하여 시뮬레이션 실행
+        res_live, slots_live = run_simulation(raw_df, init_seed, num_slots, start_limit_date=op_start, end_limit_date=today_val)
         
         if not res_live.empty:
             cur = res_live.iloc[-1]
-            last_actual = raw_df.iloc[-1] # 장중 실시간 데이터
+            last_actual = raw_df.iloc[-1] 
             
             st.subheader(f"📊 {target_ticker} 현재 운용 현황")
             c1, c2, c3, c4 = st.columns(4)
@@ -156,7 +155,6 @@ with tab1:
                 st.table(pd.DataFrame(slots_live))
 
             st.divider()
-            # 실시간 주문 가이드
             p1, p2, rsi_n = last_actual['p1_c'], last_actual['p2_c'], last_actual['rsi']
             x = np.ceil(((p1 + p2) * 1.01 / 1.99) * 100) / 100
             
@@ -181,7 +179,7 @@ with tab1:
                 else: st.write("보유 물량 없음")
             st.line_chart(res_live[['Total', 'QQQ']])
 
-# --- TAB 2: 백테스트 (명칭 변경 및 전 지표 복구) ---
+# --- TAB 2: 백테스트 ---
 with tab2:
     st.header("🔍 과거 데이터 기반 백테스트")
     col_b1, col_b2, col_b3 = st.columns(3)
@@ -192,38 +190,31 @@ with tab2:
     if st.button("🚀 백테스트 실행"):
         bt_raw = get_processed_data(target_ticker, bt_start.strftime('%Y-%m-%d'))
         if bt_raw is not None:
-            # 설정한 기간으로 데이터 필터링
-            bt_raw = bt_raw[(bt_raw.index.date >= bt_start) & (bt_raw.index.date <= bt_end)]
-            res_b, _ = run_simulation(bt_raw, bt_seed, num_slots)
+            res_b, _ = run_simulation(bt_raw, bt_seed, num_slots, start_limit_date=bt_start, end_limit_date=bt_end + timedelta(days=1))
             
             if not res_b.empty:
-                # 지표 계산
                 final_val = res_b['Total'].iloc[-1]
                 total_profit = final_val - bt_seed
                 total_ret = (final_val / bt_seed - 1) * 100
                 days = (res_b.index[-1] - res_b.index[0]).days
-                cagr = ((final_val / bt_seed) ** (365.25 / days) - 1) * 100
+                cagr = ((final_val / bt_seed) ** (365.25 / (days if days > 0 else 1)) - 1) * 100
                 mdd = (res_b['Total'] / res_b['Total'].cummax() - 1).min() * 100
                 
-                # Sharpe/Sortino/DSR
                 rets = res_b['Total'].pct_change().dropna()
                 excess = rets - ((1 + 0.053)**(1/252) - 1)
                 sharpe = np.sqrt(252) * excess.mean() / rets.std()
-                dsr = norm.cdf((sharpe - np.sqrt(2 * np.log(10))) / (np.sqrt((1 + 0.5 * skew(rets)**2 + (kurtosis(rets)-3)/4 * sharpe**2) / (len(rets)-1))))
 
                 st.divider()
                 st.subheader("🏆 백테스트 종합 결과 리포트")
-                m_c1, m_c2, m_c3, m_c4, m_c5 = st.columns(5)
+                m_c1, m_c2, m_c3, m_c4 = st.columns(4)
                 m_c1.metric("최종 자산", f"${final_val:,.0f}")
                 m_c2.metric("총 수익금", f"${total_profit:,.0f}")
                 m_c3.metric("CAGR", f"{cagr:.2f}%")
                 m_c4.metric("전체 MDD", f"{mdd:.2f}%")
-                m_c5.metric("DSR 신뢰도", f"{dsr:.4f}")
 
                 st.markdown("#### 📈 자산 성장 곡선 (Strategy vs QQQ)")
                 st.line_chart(res_b[['Total', 'QQQ']])
                 
-                # 연도별 상세 테이블
                 st.markdown("#### 📅 연도별 성과 리포트")
                 res_b['year'] = res_b.index.year
                 yearly_stats = []
