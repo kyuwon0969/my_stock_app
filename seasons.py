@@ -10,43 +10,43 @@ st.set_page_config(page_title="사계절 전략 [Tulip 단리 실험]", page_ico
 
 localS = LocalStorage()
 
-# --- 데이터 엔진 (기존 오리지널과 동일) ---
+# --- 데이터 엔진 ---
 @st.cache_data(ttl=600)
 def get_processed_data(ticker, start_date):
     try:
         fetch_start = pd.to_datetime(start_date) - pd.DateOffset(months=6)
         data = yf.download([ticker, "QQQ"], start=fetch_start, progress=False)
         if data.empty: return None
+        
         if isinstance(data.columns, pd.MultiIndex):
             target_close = data['Close'][ticker].ffill()
             qqq_close = data['Close']['QQQ'].ffill()
         else:
             target_close = data['Close'].ffill()
             qqq_close = data['Close'].ffill()
+            
         df = pd.DataFrame(index=target_close.index)
         df['close'] = target_close
         df['qqq_close'] = qqq_close
         df['prev_close'] = df['close'].shift(1)
         df['prev_close2'] = df['close'].shift(2)
+        
         delta = qqq_close.diff()
         gain = delta.where(delta > 0, 0).ewm(alpha=1/14, adjust=False).mean()
         loss = -delta.where(delta < 0, 0).ewm(alpha=1/14, adjust=False).mean()
         df['rsi'] = (100 - (100 / (1 + (gain / loss.replace(0, np.nan))))).shift(1)
+        
         return df.loc[start_date:].dropna()
     except Exception as e:
         st.error(f"⚠️ 데이터 엔진 오류: {e}")
         return None
 
 def run_simulation(df, initial_seed, num_slots):
-    """Tulip 단리 & Lily 증액 로직 엔진"""
+    """Tulip 단리 & Lily 증액 실험 엔진"""
     if df is None or df.empty: return pd.DataFrame()
     
-    cash = float(initial_seed)
-    shares, used_slots, slot_cash, avg_price = 0.0, 0, 0.0, 0.0
-    
-    # [실험 변수] Tulip 수익 예비금
-    tulip_reserve = 0.0
-    
+    cash, shares, used_slots, slot_cash, avg_price = float(initial_seed), 0.0, 0, 0.0, 0.0
+    tulip_reserve = 0.0  # Tulip 수익 저장소
     history = []
     qqq_start_price = float(df['qqq_close'].iloc[0])
     
@@ -68,18 +68,14 @@ def run_simulation(df, initial_seed, num_slots):
             sell_proceeds = shares * curr_close
             profit = sell_proceeds - (avg_price * shares)
             
-            # [핵심 실험 로직]
             if mode == "Tulip":
-                # Tulip일 때는 원금만 회수하고 수익금은 예비금으로 격리 (단리 효과)
-                cash += (avg_price * shares) 
-                tulip_reserve += profit
+                cash += (avg_price * shares) # 원금만 회수
+                tulip_reserve += profit     # 수익은 따로 보관 (단리)
             elif mode == "Lily":
-                # Lily일 때는 수익금을 포함해 회수하고, 쌓인 예비금까지 합쳐서 증액
-                cash += sell_proceeds + tulip_reserve
+                cash += sell_proceeds + tulip_reserve # 수익 + 그동안 모인 예비금 합쳐서 복리 증액
                 tulip_reserve = 0.0
             else:
-                # Ivy, Willow는 일반 복리
-                cash += sell_proceeds
+                cash += sell_proceeds # 일반 복리
                 
             shares, used_slots, slot_cash, avg_price = 0.0, 0, 0.0, 0.0
             sold_today = True
@@ -94,56 +90,110 @@ def run_simulation(df, initial_seed, num_slots):
                 used_slots += 1
         
         total_assets = cash + (shares * curr_close) + tulip_reserve
+        qqq_hold_val = (initial_seed / qqq_start_price) * qqq_curr_close
+        
         history.append({
-            'Date': date, 'Total': float(total_assets), 'Reserve': float(tulip_reserve),
-            'Cash': float(cash), 'Shares': float(shares), 'Slots': int(used_slots), 
-            'Avg_Price': float(avg_price), 'Mode': mode
+            'Date': date, 'Total': float(total_assets), 'QQQ_Hold': float(qqq_hold_val),
+            'Reserve': float(tulip_reserve), 'Cash': float(cash), 'Shares': float(shares), 
+            'Slots': int(used_slots), 'Avg_Price': float(avg_price)
         })
                     
     return pd.DataFrame(history).set_index('Date')
 
-# --- UI 레이아웃 (생략 없이 통합) ---
+# --- UI 레이아웃 ---
 with st.sidebar:
-    st.header("⚙️ Tulip 단리 실험 설정")
-    target_ticker = st.selectbox("종목 선택", ["SOXL", "USD"], index=0)
+    st.header("⚙️ 전략 및 운용 설정")
+    target_ticker = st.selectbox("대상 종목 선택", ["SOXL", "USD"], index=0)
     config_key = f"seasons_tulip_exp_{target_ticker}"
     saved_config = localS.getItem(config_key) or {"op_start": "2024-01-01", "init_seed": 10000.0, "num_slots": 5}
-    num_slots = st.select_slider("슬롯 수", options=[3, 4, 5, 6], value=int(saved_config.get('num_slots', 5)))
-    op_start = st.date_input("시작일", value=pd.to_datetime(saved_config['op_start']))
-    init_seed = st.number_input("원금", value=float(saved_config['init_seed']))
-    if st.button("💾 실험 설정 저장"):
+    
+    num_slots = st.select_slider("매수 슬롯 분할 수", options=[3, 4, 5, 6], value=int(saved_config.get('num_slots', 5)))
+    op_start = st.date_input("실제 운용 시작일", value=pd.to_datetime(saved_config['op_start']))
+    init_seed = st.number_input("투자 원금 (USD)", value=float(saved_config['init_seed']), step=1000.0)
+    
+    if st.button("💾 설정값 저장"):
         localS.setItem(config_key, {"op_start": op_start.strftime('%Y-%m-%d'), "init_seed": init_seed, "num_slots": num_slots})
-        st.success("실험 로직 저장 완료!")
+        st.success("설정 저장 완료!")
+    if st.button("🔄 강제 새로고침"):
+        st.cache_data.clear()
+        st.rerun()
 
-tab1, tab2 = st.tabs(["🎯 실전 추적", "📊 실험 백테스트"])
+tab1, tab2 = st.tabs(["🎯 실시간 추적 & 가이드", "📊 과거 백테스트 리포트"])
 
+# --- TAB 1: 실시간 추적 ---
 with tab1:
     df_live = get_processed_data(target_ticker, op_start.strftime('%Y-%m-%d'))
     if df_live is not None and not df_live.empty:
         hist_live = run_simulation(df_live, init_seed, num_slots)
-        cur = hist_live.iloc[-1]
-        st.subheader(f"📊 {target_ticker} 현황 (예비금: ${cur['Reserve']:,.2f})")
+        cur, last = hist_live.iloc[-1], df_live.iloc[-1]
+        
+        st.subheader(f"📊 {target_ticker} 운용 현황 (Tulip 단리 실험 중)")
         m1, m2, m3, m4 = st.columns(4)
-        m1.metric("총 자산", f"${cur['Total']:,.2f}")
-        m2.metric("예비 현금", f"${cur['Reserve']:,.2f}", help="Tulip 수익 보관함")
-        m3.metric("현재 모드", cur['Mode'])
-        m4.metric("진행 슬롯", f"{int(cur['Slots'])}회")
-        st.line_chart(hist_live[['Total']])
+        total_ret, qqq_ret = (cur['Total'] / init_seed - 1) * 100, (cur['QQQ_Hold'] / init_seed - 1) * 100
+        m1.metric("전략 수익률", f"{total_ret:+.2f}%", f"QQQ 대비 {total_ret-qqq_ret:+.2f}%")
+        m2.metric("평균 단가", f"${cur['Avg_Price']:.2f}")
+        m3.metric("진행 회차", f"{int(cur['Slots'])} / {num_slots} 슬롯")
+        m4.metric("현재 총 자산", f"${cur['Total']:,.2f}")
+        
+        st.info(f"💰 현재 Tulip 예비금 보관액: **${cur['Reserve']:,.2f}** (Lily 진입 시 합산 예정)")
+        st.line_chart(hist_live[['Total', 'QQQ_Hold']])
 
+# --- TAB 2: 백테스트 ---
 with tab2:
-    st.header("🔍 Tulip 단리 vs Lily 증액 성과 분석")
+    st.header(f"🔍 {num_slots}슬롯 Tulip 단리 로직 성과 분석")
+    c1, c2, c3 = st.columns(3)
+    with c1: s_date = st.date_input("테스트 시작일", value=datetime(2013, 1, 1), key="bt_s")
+    with c2: e_date = st.date_input("테스트 종료일", value=datetime.now(), key="bt_e")
+    with c3: s_seed = st.number_input("테스트 시드", value=10000.0, step=1000.0, key="bt_seed")
+
     if st.button("🚀 백테스트 실행"):
-        df_back = get_processed_data(target_ticker, "2013-01-01")
+        df_back = get_processed_data(target_ticker, s_date.strftime('%Y-%m-%d'))
         if df_back is not None:
-            res_back = run_simulation(df_back, init_seed, num_slots)
-            st.line_chart(res_back[['Total']])
-            # 성과 지표 생략 없이 연도별 표 출력 로직...
-            res_back['year'] = res_back.index.year
-            yearly = []
-            temp_seed = init_seed
-            for yr in sorted(res_back['year'].unique()):
-                y_df = res_back[res_back['year'] == yr]
-                y_e_v = y_df['Total'].iloc[-1]
-                yearly.append({'연도': yr, '수익률': f"{(y_e_v/temp_seed-1)*100:.2f}%", '최대 예비금': f"${y_df['Reserve'].max():,.0f}"})
-                temp_seed = y_e_v
-            st.table(pd.DataFrame(yearly))
+            df_back = df_back.loc[:e_date.strftime('%Y-%m-%d')]
+            res_back = run_simulation(df_back, s_seed, num_slots)
+            
+            if not res_back.empty:
+                # 1. 주요 지표 계산
+                f_v, f_q = res_back['Total'].iloc[-1], res_back['QQQ_Hold'].iloc[-1]
+                t_r, q_r = (f_v / s_seed - 1) * 100, (f_q / s_seed - 1) * 100
+                days = (res_back.index[-1] - res_back.index[0]).days
+                cagr = ((f_v / s_seed) ** (365.25 / (days if days > 0 else 1)) - 1) * 100
+                mdd = (res_back['Total'] / res_back['Total'].cummax() - 1).min() * 100
+
+                st.divider()
+                r1, r2, r3, r4 = st.columns(4)
+                r1.metric("최종 자산", f"${f_v:,.2f}")
+                r2.metric("총 수익률", f"{t_r:,.2f}%", f"QQQ 대비 {t_r-q_r:+.2f}%")
+                r3.metric("CAGR (연복리)", f"{cagr:.2f}%")
+                r4.metric("전체 MDD", f"{mdd:.2f}%")
+                
+                st.line_chart(res_back[['Total', 'QQQ_Hold']])
+
+                # 2. 연도별 성과 상세 요약
+                res_back['year'] = res_back.index.year
+                yearly_data = []
+                temp_seed = s_seed
+                for yr in sorted(res_back['year'].unique()):
+                    y_df = res_back[res_back['year'] == yr]
+                    y_e_v = y_df['Total'].iloc[-1]
+                    
+                    # 해당 연도 QQQ 수익률
+                    q_start_v = y_df['QQQ_Hold'].iloc[0]
+                    q_end_v = y_df['QQQ_Hold'].iloc[-1]
+                    q_r_y = (q_end_v / q_start_v - 1) * 100
+                    
+                    # 해당 연도 MDD
+                    y_mdd = (y_df['Total'] / y_df['Total'].cummax() - 1).min() * 100
+                    
+                    yearly_data.append({
+                        '연도': yr, 
+                        '전략 수익률': f"{(y_e_v/temp_seed-1)*100:.2f}%", 
+                        'QQQ 수익률': f"{q_r_y:.2f}%", 
+                        '연도별 MDD': f"{y_mdd:.2f}%",
+                        '최대 예비금': f"${y_df['Reserve'].max():,.0f}"
+                    })
+                    temp_seed = y_e_v
+                
+                st.subheader("📅 연도별 성과 상세 리포트")
+                st.table(pd.DataFrame(yearly_data))
+            
