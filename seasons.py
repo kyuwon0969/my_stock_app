@@ -46,7 +46,7 @@ def run_simulation(df, initial_seed, num_slots):
     if df is None or df.empty: return pd.DataFrame()
     
     cash, shares, used_slots, slot_cash, avg_price = float(initial_seed), 0.0, 0, 0.0, 0.0
-    ivy_reserve = 0.0  # Ivy 수익 저장소
+    ivy_reserve = 0.0  
     history = []
     qqq_start_price = float(df['qqq_close'].iloc[0])
     
@@ -57,7 +57,6 @@ def run_simulation(df, initial_seed, num_slots):
         x_raw = (p1 + p2) * 1.01 / 1.99
         willow_x = np.ceil(x_raw * 100) / 100
         
-        # 모드 판정
         if rsi_val > 65: mode = "Ivy"; b_limit, s_limit = willow_x - 0.01, np.ceil((willow_x * 1.03) * 100) / 100
         elif rsi_val > 45: mode = "Willow"; b_limit, s_limit = willow_x - 0.01, willow_x
         elif rsi_val > 30: mode = "Lily"; b_limit, s_limit = np.floor((willow_x * 0.975) * 100) / 100, willow_x
@@ -67,18 +66,14 @@ def run_simulation(df, initial_seed, num_slots):
         if shares > 0 and curr_close >= s_limit:
             sell_proceeds = shares * curr_close
             profit = sell_proceeds - (avg_price * shares)
-            
-            # [핵심 실험 로직 1: Ivy 수익 저축]
             if mode == "Ivy" and profit > 0:
-                cash += (avg_price * shares) # 원금만 회수
-                ivy_reserve += profit        # 수익은 저축
+                cash += (avg_price * shares)
+                ivy_reserve += profit        
             else:
-                cash += sell_proceeds        # 나머지 모드는 일반 회수
-                
+                cash += sell_proceeds        
             shares, used_slots, slot_cash, avg_price = 0.0, 0, 0.0, 0.0
             sold_today = True
         
-        # [핵심 실험 로직 2: Tulip 진입 시 비상금 투입]
         if used_slots == 0 and mode == "Tulip" and ivy_reserve > 0:
             cash += ivy_reserve
             ivy_reserve = 0.0
@@ -98,7 +93,7 @@ def run_simulation(df, initial_seed, num_slots):
         history.append({
             'Date': date, 'Total': float(total_assets), 'QQQ_Hold': float(qqq_hold_val),
             'Ivy_Reserve': float(ivy_reserve), 'Cash': float(cash), 'Shares': float(shares), 
-            'Slots': int(used_slots), 'Avg_Price': float(avg_price)
+            'Slots': int(used_slots), 'Avg_Price': float(avg_price), 'Slot_Cash': float(slot_cash)
         })
                     
     return pd.DataFrame(history).set_index('Date')
@@ -116,20 +111,22 @@ with st.sidebar:
     
     if st.button("💾 설정값 저장"):
         localS.setItem(config_key, {"op_start": op_start.strftime('%Y-%m-%d'), "init_seed": init_seed, "num_slots": num_slots})
-        st.success("Ivy 단리 실험 설정 저장!")
+        st.success("설정 저장 완료!")
     if st.button("🔄 강제 새로고침"):
         st.cache_data.clear()
         st.rerun()
 
 tab1, tab2 = st.tabs(["🎯 실시간 추적 & 가이드", "📊 과거 백테스트 리포트"])
 
+# --- TAB 1: 실시간 추적 & 가이드 (복구 완료) ---
 with tab1:
     df_live = get_processed_data(target_ticker, op_start.strftime('%Y-%m-%d'))
     if df_live is not None and not df_live.empty:
         hist_live = run_simulation(df_live, init_seed, num_slots)
-        cur = hist_live.iloc[-1]
+        cur, last = hist_live.iloc[-1], df_live.iloc[-1]
         
-        st.subheader(f"📊 {target_ticker} 현황 (Ivy 수익 저축 중)")
+        # 1. 상단 현황판
+        st.subheader(f"📊 {target_ticker} 운용 현황 (Ivy 수익 저축 중)")
         m1, m2, m3, m4 = st.columns(4)
         total_ret, qqq_ret = (cur['Total'] / init_seed - 1) * 100, (cur['QQQ_Hold'] / init_seed - 1) * 100
         m1.metric("전략 수익률", f"{total_ret:+.2f}%", f"QQQ 대비 {total_ret-qqq_ret:+.2f}%")
@@ -137,15 +134,51 @@ with tab1:
         m3.metric("진행 회차", f"{int(cur['Slots'])} / {num_slots} 슬롯")
         m4.metric("현재 총 자산", f"${cur['Total']:,.2f}")
         
-        st.info(f"🏦 현재 Ivy 비상금 저축액: **${cur['Ivy_Reserve']:,.2f}** (Tulip 진입 시 폭탄 매수용)")
+        st.info(f"🏦 현재 Ivy 비상금 저축액: **${cur['Ivy_Reserve']:,.2f}** (Tulip 진입 시 자동 합산)")
+
+        # 2. 실전 주문 가이드 (RSI, p1, p2 데이터 포함)
+        st.divider()
+        rsi_now, p1, p2 = last['rsi'], last['prev_close'], last['prev_close2']
+        x_raw = (p1 + p2) * 1.01 / 1.99
+        willow_x = np.ceil(x_raw * 100) / 100
+        
+        if rsi_now > 65: mode, color, b_l, s_l = "Ivy", "red", willow_x - 0.01, np.ceil((willow_x * 1.03) * 100) / 100
+        elif rsi_now > 45: mode, color, b_l, s_l = "Willow", "orange", willow_x - 0.01, willow_x
+        elif rsi_now > 30: mode, color, b_l, s_l = "Lily", "blue", np.floor((willow_x * 0.975) * 100) / 100, willow_x
+        else: mode, color, b_l, s_l = "Tulip", "purple", np.floor((willow_x * 0.975) * 100) / 100, willow_x
+
+        st.markdown(f"### 🎯 오늘의 실전 주문 가이드 (현재 모드: :{color}[{mode}])")
+        
+        # 근거 데이터 표기
+        st.write(f"🔍 **판단 근거:** QQQ RSI `{rsi_now:.2f}` | 전일 종가(p1) `${p1:.2f}` | 전전일 종가(p2) `${p2:.2f}`")
+        
+        cl, cr = st.columns(2)
+        with cl:
+            st.success(f"#### 📥 {int(cur['Slots']) + 1}회차 매수 (LOC)")
+            if int(cur['Slots']) < num_slots:
+                # 다음 회차 투입 금액 계산
+                target_slot_cash = cur['Cash'] / (num_slots - int(cur['Slots'])) if int(cur['Slots']) == 0 else cur['Slot_Cash']
+                buy_qty = int(target_slot_cash // b_l)
+                st.write(f"**매수 가격:** `${b_l:.2f}` 이하 (LOC)")
+                st.write(f"**권장 수량:** `{buy_qty} 주` (${target_slot_cash:,.2f} 규모)")
+            else: st.write("✅ 모든 슬롯 매수 완료 (풀매수 상태)")
+        with cr:
+            st.error("#### 📤 전량 매도 (LOC)")
+            if cur['Shares'] > 0:
+                st.write(f"**매도 가격:** `${s_l:.2f}` 이상 (LOC)")
+                st.write(f"**매도 수량:** `{int(cur['Shares'])} 주` (전량)")
+                st.write(f"**목표 수익률:** `{(s_l/cur['Avg_Price']-1)*100:+.2f}%` (평단 대비)")
+            else: st.write("보유 물량 없음")
+            
         st.line_chart(hist_live[['Total', 'QQQ_Hold']])
 
+# --- TAB 2: 백테스트 (풀 리포트 복구) ---
 with tab2:
     st.header(f"🔍 {num_slots}슬롯 Ivy 단리 실험 백테스트")
     c1, c2, c3 = st.columns(3)
-    with c1: s_date = st.date_input("테스트 시작일", value=datetime(2013, 1, 1), key="final_bt_s")
-    with c2: e_date = st.date_input("테스트 종료일", value=datetime.now(), key="final_bt_e")
-    with c3: s_seed = st.number_input("테스트 시드", value=10000.0, step=1000.0, key="final_bt_seed")
+    with c1: s_date = st.date_input("테스트 시작일", value=datetime(2013, 1, 1), key="bt_s")
+    with c2: e_date = st.date_input("테스트 종료일", value=datetime.now(), key="bt_e")
+    with c3: s_seed = st.number_input("테스트 시드", value=10000.0, step=1000.0, key="bt_seed")
 
     if st.button("🚀 백테스트 실행"):
         df_back = get_processed_data(target_ticker, s_date.strftime('%Y-%m-%d'))
