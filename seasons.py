@@ -15,7 +15,7 @@ localS = LocalStorage()
 # 한국 시간대 설정
 KST = pytz.timezone('Asia/Seoul')
 
-# --- 데이터 엔진 (기존 유지하되 시점 로직 강화) ---
+# --- 데이터 엔진 (그 전의 코드 로직 복구) ---
 @st.cache_data(ttl=300)
 def get_processed_data(ticker, start_date):
     try:
@@ -34,16 +34,14 @@ def get_processed_data(ticker, start_date):
         df = pd.DataFrame(index=target_close.index)
         df['close'], df['qqq_close'] = target_close, qqq_close
         
-        # [수정] 확정된 과거 데이터만 사용하기 위해 shift 적용
+        # [복구] 데이터 호출 시점 로직
         df['p1_c'], df['p2_c'] = df['close'].shift(1), df['close'].shift(2)
         
         delta = qqq_close.diff()
         gain = delta.where(delta > 0, 0).ewm(alpha=1/14, adjust=False).mean()
         loss = -delta.where(delta < 0, 0).ewm(alpha=1/14, adjust=False).mean()
         
-        # [수정] 확정된 전일 종가 기준 RSI
         df['rsi'] = (100 - (100 / (1 + (gain / loss.replace(0, np.nan))))).shift(1)
-        # 가이드용은 shift 없이 계산하되, 아래 tab1에서 확정된 마지막 행만 추출하여 사용
         df['rsi_live'] = (100 - (100 / (1 + (gain / loss.replace(0, np.nan)))))
         
         return df 
@@ -51,7 +49,7 @@ def get_processed_data(ticker, start_date):
         st.error(f"⚠️ 데이터 엔진 오류: {e}")
         return None
 
-# --- 시뮬레이션 엔진 (입출금 통합 로직 반영) ---
+# --- 시뮬레이션 엔진 (자금 관리 통합 로직 반영) ---
 def run_simulation(df, initial_seed, num_slots, pcr=0.7, start_limit_date=None, end_limit_date=None, pending_dep=0.0, manual_withdrawn=0.0):
     if df is None or df.empty: return pd.DataFrame(), [], []
     
@@ -64,7 +62,7 @@ def run_simulation(df, initial_seed, num_slots, pcr=0.7, start_limit_date=None, 
 
     if sim_df.empty: return pd.DataFrame(), [], []
 
-    # 초기 현금 (기존 수기 인출값 유지 - 호환성용)
+    # 초기 현금
     cash = float(initial_seed) - manual_withdrawn
     shares, used_slots, slot_cash, avg_price = 0.0, 0, 0.0, 0.0
     ivy_reserve, cumulative_withdrawn = 0.0, 0.0 
@@ -103,7 +101,7 @@ def run_simulation(df, initial_seed, num_slots, pcr=0.7, start_limit_date=None, 
             shares, used_slots, slot_cash, avg_price, slot_details = 0.0, 0, 0.0, 0.0, []
             sold = True
         
-        # [수정] 차기 사이클 시작 시 보류된 입금/인출액 자동 투입 (음수 지원을 위해 != 0 적용)
+        # [통합 반영] 차기 사이클 시작 시 보류된 입금/인출액 자동 투입
         if used_slots == 0 and internal_pending != 0:
             cash += internal_pending
             internal_pending = 0.0
@@ -151,7 +149,7 @@ with st.sidebar:
     
     st.divider()
     st.subheader("💰 수기 자금 관리")
-    # [수정] 항목명 변경 및 도움말 수정
+    # [수정] 항목명 및 도움말 변경
     p_dep = st.number_input("추가 입금/인출액 ($)", value=float(get_setting('pending_dep', 0.0)), help="전량 매도 후 현금 상태일 때 반영됩니다. 인출은 음수 값을 입력하면 됩니다.")
 
     if st.button("💾 설정값 저장 및 강제 새로고침"):
@@ -167,13 +165,15 @@ with tab1:
     if raw_df is not None:
         now_kst = datetime.now(KST).strftime('%Y-%m-%d %H:%M:%S')
         today_val = date.today()
-        # 시뮬레이션 실행 (기존 수기 인출 필드는 0.0으로 고정하여 통합 관리)
+        # 시뮬레이션 실행 (manual_withdrawn 필드는 하위 호환성을 위해 0.0으로 고정)
         res_live, slots_live, _ = run_simulation(raw_df, init_seed, num_slots, pcr=pcr_val, start_limit_date=op_start, end_limit_date=today_val, pending_dep=p_dep, manual_withdrawn=0.0)
         
         if not res_live.empty:
             cur = res_live.iloc[-1]
+            # [복구] 그 전의 코드 로직: 확정된 데이터를 기반으로 가이드 추출
             clean_df = raw_df.dropna(subset=['rsi_live'])
             latest_row, prev_row = clean_df.iloc[-1], clean_df.iloc[-2]
+            
             p1_val, p1_date = latest_row['close'], clean_df.index[-1].strftime('%Y-%m-%d')
             p2_val, p2_date = prev_row['close'], clean_df.index[-2].strftime('%Y-%m-%d')
             rsi_val = latest_row['rsi_live']
@@ -194,10 +194,11 @@ with tab1:
                 st.table(pd.DataFrame(slots_live))
 
             st.divider()
+            # 확정된 p1, p2로 계산한 x값
             x = np.ceil(((p1_val + p2_val) * 1.01 / 1.99) * 100) / 100
             mode, color = ("Ivy", "red") if rsi_val > 65 else ("Willow", "orange") if rsi_val > 45 else ("Lily", "blue") if rsi_val > 30 else ("Tulip", "purple")
             st.markdown(f"### 🎯 오늘의 실전 가이드 (현재 모드: :{color}[{mode}])")
-            st.write(f"🔍 **판단 근거:** 확정 RSI `{rsi_val:.2f}` | p1 `${p1_val:.2f}` ({p1_date}) | p2 `${p2_val:.2f}` ({p2_date}) | 기준 x값 `${x:.2f}`")
+            st.write(f"🔍 **판단 근거:** 확정 RSI `{rsi_val:.2f}` | p1(어제) `${p1_val:.2f}` ({p1_date}) | p2(그저께) `${p2_val:.2f}` ({p2_date}) | 기준 x값 `${x:.2f}`")
             
             g1, g2 = st.columns(2)
             with g1:
