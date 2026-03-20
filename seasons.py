@@ -15,7 +15,7 @@ localS = LocalStorage()
 # 한국 시간대 설정
 KST = pytz.timezone('Asia/Seoul')
 
-# --- 데이터 엔진 (성공적인 버전의 로직으로 완벽 복구) ---
+# --- 데이터 엔진 (시점 로직 강화) ---
 @st.cache_data(ttl=300)
 def get_processed_data(ticker, start_date):
     try:
@@ -34,23 +34,23 @@ def get_processed_data(ticker, start_date):
         df = pd.DataFrame(index=target_close.index)
         df['close'], df['qqq_close'] = target_close, qqq_close
         
-        # [복구] 확정된 과거 데이터 사용을 위한 shift 적용
+        # 확정된 과거 데이터만 사용하기 위해 shift 적용
         df['p1_c'], df['p2_c'] = df['close'].shift(1), df['close'].shift(2)
         
         delta = qqq_close.diff()
         gain = delta.where(delta > 0, 0).ewm(alpha=1/14, adjust=False).mean()
         loss = -delta.where(delta < 0, 0).ewm(alpha=1/14, adjust=False).mean()
         
-        # 시뮬레이션용 (전일 기준) RSI
+        # 확정된 전일 종가 기준 RSI
         df['rsi'] = (100 - (100 / (1 + (gain / loss.replace(0, np.nan))))).shift(1)
-        # 가이드용 (당일 확정 기준) RSI
+        # 가이드용은 shift 없이 계산하되, 아래 tab1에서 확정된 마지막 행만 추출하여 사용
         df['rsi_live'] = (100 - (100 / (1 + (gain / loss.replace(0, np.nan)))))
         
         return df 
     except Exception as e:
         st.error(f"⚠️ 데이터 엔진 오류: {e}")
         return None
-
+        
 # --- 시뮬레이션 엔진 (입출금 통합 로직 유지) ---
 def run_simulation(df, initial_seed, num_slots, pcr=0.7, start_limit_date=None, end_limit_date=None, pending_dep=0.0, manual_withdrawn=0.0):
     if df is None or df.empty: return pd.DataFrame(), [], []
