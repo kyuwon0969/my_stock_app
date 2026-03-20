@@ -187,21 +187,38 @@ with st.sidebar:
 tab1, tab2 = st.tabs(["🎯 실시간 현황 & 가이드", "📊 과거 데이터 기반 백테스트"])
 
 with tab1:
+    # 1. 데이터 가져오기 (충분한 과거 데이터를 위해 op_start보다 여유 있게 가져옴)
     raw_df = get_processed_data(target_ticker, op_start.strftime('%Y-%m-%d'))
-    if raw_df is not None:
+    
+    if raw_df is not None and len(raw_df) >= 2:
         now_kst = datetime.now(KST).strftime('%Y-%m-%d %H:%M:%S')
         today_val = date.today()
-        # 시뮬레이션 실행
-        res_live, slots_live, _ = run_simulation(raw_df, init_seed, num_slots, pcr=pcr_val, start_limit_date=op_start, end_limit_date=today_val, pending_dep=p_dep, manual_withdrawn=m_with)
+        
+        # 시뮬레이션 실행 (운용 시작일부터 오늘 직전까지의 기록)
+        res_live, slots_live, _ = run_simulation(
+            raw_df, init_seed, num_slots, pcr=pcr_val, 
+            start_limit_date=op_start, end_limit_date=today_val, 
+            pending_dep=p_dep, manual_withdrawn=m_with
+        )
         
         if not res_live.empty:
-            cur = res_live.iloc[-1]
-            latest_row, prev_row = raw_df.iloc[-1], raw_df.iloc[-2]
-            p1_val, p2_val = latest_row['close'], prev_row['close']
-            rsi_val = latest_row['rsi_live']
+            # --- [수정 구간] 최신 데이터 추출 로직 ---
+            # raw_df의 마지막 행이 '어제' 혹은 '가장 최근 장마감' 데이터입니다.
+            latest_data = raw_df.iloc[-1]   # 전날 (Last Trading Day)
+            prev_data = raw_df.iloc[-2]     # 전전날 (2nd Last Trading Day)
             
+            p1_val = float(latest_data['close'])      # 전날 SOXL 종가
+            p2_val = float(prev_data['close'])       # 전전날 SOXL 종가
+            rsi_val = float(latest_data['rsi_live'])  # 전날 QQQ RSI (rsi_live가 당일 기준이므로)
+            
+            # 기준 날짜 확인용
+            data_date = raw_df.index[-1].strftime('%Y-%m-%d')
+            prev_date = raw_df.index[-2].strftime('%Y-%m-%d')
+            # ---------------------------------------
+
+            cur = res_live.iloc[-1]
             st.subheader(f"📊 {target_ticker} 현재 운용 현황")
-            st.caption(f"🕒 최종 업데이트 (KST): {now_kst} | 기준 데이터: {raw_df.index[-1].strftime('%Y-%m-%d')} 종가 반영")
+            st.caption(f"🕒 업데이트: {now_kst} | 📅 데이터 기준: {data_date}(p1), {prev_date}(p2)")
             
             c1, c2, c3, c4 = st.columns(4)
             c1.metric("총 수익률", f"{(cur['Total']/init_seed-1)*100:+.2f}%")
@@ -211,46 +228,56 @@ with tab1:
             
             st.info(f"🏦 Ivy 비상금: **${cur['Ivy']:,.2f}** | 💸 PCR 인출액: **${cur['Withdrawn']:,.2f}**")
             
-            # [요청 기능] 수기 인출 (슬롯 0개일 때만 가능)
+            # 수기 인출 로직 (기존 유지)
             if int(cur['Slots']) == 0:
                 st.success("✅ 현재 모든 슬롯이 비어 있어 '인출'이 가능합니다.")
                 new_withdraw = st.number_input("수기 인출 금액 입력 ($)", value=m_with, step=100.0)
                 if new_withdraw != m_with:
-                    # 인출 시 즉시 URL 및 스토리지 업데이트
                     st.query_params["manual_withdrawn"] = new_withdraw
                     localS.setItem(config_key, {
                         "op_start": op_start.strftime('%Y-%m-%d'), "init_seed": init_seed, 
                         "num_slots": num_slots, "pcr": pcr_val, "pending_dep": p_dep, "manual_withdrawn": new_withdraw
                     })
-                    st.warning("인출 금액이 저장되었습니다. 아래 버튼을 눌러 확정하세요.")
                     if st.button("인출 확정 및 반영"): st.rerun()
             else:
-                st.error("⚠️ 주식 보유 중(사이클 진행 중)에는 '인출' 기능을 사용할 수 없습니다.")
+                st.error("⚠️ 주식 보유 중에는 '인출' 기능을 사용할 수 없습니다.")
 
             if slots_live:
                 st.markdown("#### 📝 확정된 보유 슬롯 내역")
                 st.table(pd.DataFrame(slots_live))
 
             st.divider()
+            
+            # --- [가이드 계산] 수정된 p1, p2, rsi 적용 ---
+            # 계산식: x = ceil((p1 + p2) * 1.01 / 1.99)
             x = np.ceil(((p1_val + p2_val) * 1.01 / 1.99) * 100) / 100
-            mode, color = ("Ivy", "red") if rsi_val > 65 else ("Willow", "orange") if rsi_val > 45 else ("Lily", "blue") if rsi_val > 30 else ("Tulip", "purple")
+            
+            # 모드 결정
+            if rsi_val > 65: mode, color = "Ivy", "red"
+            elif rsi_val > 45: mode, color = "Willow", "orange"
+            elif rsi_val > 30: mode, color = "Lily", "blue"
+            else: mode, color = "Tulip", "purple"
+            
             st.markdown(f"### 🎯 오늘의 실전 가이드 (현재 모드: :{color}[{mode}])")
-            st.write(f"🔍 **판단 근거:** QQQ RSI `{rsi_val:.2f}` | p1 `${p1_val:.2f}` | p2 `${p2_val:.2f}` | 기준 x값 `${x:.2f}`")
+            st.write(f"🔍 **판단 근거:** QQQ RSI(전날) `{rsi_val:.2f}` | p1(전날) `${p1_val:.2f}` | p2(전전날) `${p2_val:.2f}` | 기준 x값 `${x:.2f}`")
             
             g1, g2 = st.columns(2)
             with g1:
+                # 매수 타점: RSI > 45 이면 x-0.01, 아니면 x * 0.975
                 b_p = x - 0.01 if rsi_val > 45 else np.floor((x * 0.975)*100)/100
                 st.success(f"#### 📥 {int(cur['Slots'])+1}회차 매수 (LOC)")
                 if cur['Slots'] < num_slots:
                     t_cash = cur['Cash'] / (num_slots - cur['Slots'])
                     st.write(f"**타점:** `${b_p:.2f}` 이하 | **정량:** `{int(t_cash // b_p)} 주`")
-                else: st.write("✅ 매수 완료")
+                else: st.write("✅ 매수 완료 (모든 슬롯 소진)")
             with g2:
+                # 매도 타점: RSI > 65 이면 x * 1.03, 아니면 x
                 s_p = np.ceil((x * 1.03)*100)/100 if rsi_val > 65 else x
                 st.error("#### 📤 전량 매도 (LOC)")
                 if cur['Shares'] > 0:
                     st.write(f"**타점:** `${s_p:.2f}` 이상 | **수량:** `{int(cur['Shares'])} 주`")
-                else: st.write("보유 없음")
+                else: st.write("보유 물량 없음")
+            
             st.line_chart(res_live[['Total', 'QQQ']])
 
 with tab2:
