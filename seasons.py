@@ -15,7 +15,7 @@ localS = LocalStorage()
 # 한국 시간대 설정
 KST = pytz.timezone('Asia/Seoul')
 
-# --- 데이터 엔진 (그 전의 코드 로직 복구) ---
+# --- 데이터 엔진 (그 전의 성공적인 코드 로직 복구) ---
 @st.cache_data(ttl=300)
 def get_processed_data(ticker, start_date):
     try:
@@ -34,14 +34,16 @@ def get_processed_data(ticker, start_date):
         df = pd.DataFrame(index=target_close.index)
         df['close'], df['qqq_close'] = target_close, qqq_close
         
-        # [복구] 데이터 호출 시점 로직
+        # [복구] 시뮬레이션 루프용 shift 데이터 생성
         df['p1_c'], df['p2_c'] = df['close'].shift(1), df['close'].shift(2)
         
         delta = qqq_close.diff()
         gain = delta.where(delta > 0, 0).ewm(alpha=1/14, adjust=False).mean()
         loss = -delta.where(delta < 0, 0).ewm(alpha=1/14, adjust=False).mean()
         
+        # 시뮬레이션용 (전일 기준) RSI
         df['rsi'] = (100 - (100 / (1 + (gain / loss.replace(0, np.nan))))).shift(1)
+        # 가이드용 (현재 마감 확정 기준) 최신 RSI
         df['rsi_live'] = (100 - (100 / (1 + (gain / loss.replace(0, np.nan)))))
         
         return df 
@@ -49,7 +51,7 @@ def get_processed_data(ticker, start_date):
         st.error(f"⚠️ 데이터 엔진 오류: {e}")
         return None
 
-# --- 시뮬레이션 엔진 (자금 관리 통합 로직 반영) ---
+# --- 시뮬레이션 엔진 (입출금 통합 로직 반영) ---
 def run_simulation(df, initial_seed, num_slots, pcr=0.7, start_limit_date=None, end_limit_date=None, pending_dep=0.0, manual_withdrawn=0.0):
     if df is None or df.empty: return pd.DataFrame(), [], []
     
@@ -62,7 +64,6 @@ def run_simulation(df, initial_seed, num_slots, pcr=0.7, start_limit_date=None, 
 
     if sim_df.empty: return pd.DataFrame(), [], []
 
-    # 초기 현금
     cash = float(initial_seed) - manual_withdrawn
     shares, used_slots, slot_cash, avg_price = 0.0, 0, 0.0, 0.0
     ivy_reserve, cumulative_withdrawn = 0.0, 0.0 
@@ -101,7 +102,7 @@ def run_simulation(df, initial_seed, num_slots, pcr=0.7, start_limit_date=None, 
             shares, used_slots, slot_cash, avg_price, slot_details = 0.0, 0, 0.0, 0.0, []
             sold = True
         
-        # [통합 반영] 차기 사이클 시작 시 보류된 입금/인출액 자동 투입
+        # 차기 사이클 시작 시 보류된 입금/인출액 자동 투입 (음수 지원)
         if used_slots == 0 and internal_pending != 0:
             cash += internal_pending
             internal_pending = 0.0
@@ -149,7 +150,6 @@ with st.sidebar:
     
     st.divider()
     st.subheader("💰 수기 자금 관리")
-    # [수정] 항목명 및 도움말 변경
     p_dep = st.number_input("추가 입금/인출액 ($)", value=float(get_setting('pending_dep', 0.0)), help="전량 매도 후 현금 상태일 때 반영됩니다. 인출은 음수 값을 입력하면 됩니다.")
 
     if st.button("💾 설정값 저장 및 강제 새로고침"):
@@ -165,12 +165,12 @@ with tab1:
     if raw_df is not None:
         now_kst = datetime.now(KST).strftime('%Y-%m-%d %H:%M:%S')
         today_val = date.today()
-        # 시뮬레이션 실행 (manual_withdrawn 필드는 하위 호환성을 위해 0.0으로 고정)
+        # 시뮬레이션 실행
         res_live, slots_live, _ = run_simulation(raw_df, init_seed, num_slots, pcr=pcr_val, start_limit_date=op_start, end_limit_date=today_val, pending_dep=p_dep, manual_withdrawn=0.0)
         
         if not res_live.empty:
             cur = res_live.iloc[-1]
-            # [복구] 그 전의 코드 로직: 확정된 데이터를 기반으로 가이드 추출
+            # [복구] 성공적이었던 가이드 변수 할당 로직
             clean_df = raw_df.dropna(subset=['rsi_live'])
             latest_row, prev_row = clean_df.iloc[-1], clean_df.iloc[-2]
             
@@ -179,7 +179,7 @@ with tab1:
             rsi_val = latest_row['rsi_live']
             
             st.subheader(f"📊 {target_ticker} 현재 운용 현황")
-            st.caption(f"🕒 최종 업데이트 (KST): {now_kst} | 확정 기준일: {p1_date}")
+            st.caption(f"🕒 최종 업데이트 (KST): {now_kst} | 기준 데이터: {p1_date} 종가 및 RSI 반영")
             
             c1, c2, c3, c4 = st.columns(4)
             c1.metric("총 수익률", f"{(cur['Total']/init_seed-1)*100:+.2f}%")
@@ -246,7 +246,7 @@ with tab2:
                 m2.markdown(f"<p style='font-size: 0.85rem; color: gray; margin-top: -15px;'>({int(f_val * today_fx):,}원)</p>", unsafe_allow_html=True)
                 m3.metric("CAGR (연복리)", f"{cagr:.2f}%")
                 m4, m5, m6 = st.columns(3)
-                m4.metric("MDD", f"{mdd:.2f}%"); m5.metric("Calmar", f"{cagr/abs(mdd):.2f}"); m6.metric("총 인출 현금", f"${withdrawn:,.0f}")
+                m4.metric("MDD", f"{mdd:.2f}%"); m5.metric("Calmar Ratio", f"{cagr/abs(mdd):.2f}"); m6.metric("총 인출 현금", f"${withdrawn:,.0f}")
                 st.line_chart(res_b[['Total', 'QQQ']])
                 res_b['year'] = res_b.index.year
                 y_stats = []
