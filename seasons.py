@@ -8,7 +8,7 @@ from datetime import datetime, date, timedelta
 from streamlit_local_storage import LocalStorage
 
 # 1. 페이지 설정
-st.set_page_config(page_title="사계절 전략 매니저 Pro", page_icon="🌿", layout="wide")
+st.set_page_config(page_title="사계절 전략 매니저 V6", page_icon="🌿", layout="wide")
 localS = LocalStorage()
 
 # --- 데이터 엔진 ---
@@ -39,21 +39,18 @@ def get_processed_data(ticker, start_date):
         st.error(f"⚠️ 데이터 엔진 오류: {e}")
         return None
 
-# --- 시뮬레이션 엔진 (PCR 로직 추가) ---
+# --- 시뮬레이션 엔진 (보험금 수령 로직 추가) ---
 def run_simulation(df, initial_seed, num_slots, pcr=0.7, start_limit_date=None, end_limit_date=None):
     if df is None or df.empty: return pd.DataFrame(), [], []
     
     sim_df = df.copy()
-    if start_limit_date:
-        sim_df = sim_df[sim_df.index.date >= start_limit_date]
-    if end_limit_date:
-        sim_df = sim_df[sim_df.index.date < end_limit_date]
-
+    if start_limit_date: sim_df = sim_df[sim_df.index.date >= start_limit_date]
+    if end_limit_date: sim_df = sim_df[sim_df.index.date < end_limit_date]
     if sim_df.empty: return pd.DataFrame(), [], []
 
     cash, shares, used_slots, slot_cash, avg_price = float(initial_seed), 0.0, 0, 0.0, 0.0
     ivy_reserve = 0.0
-    safe_cash = 0.0 # [추가] PCR에 의해 보호되는 30% 수익금 주머니
+    safe_cash = 0.0 # PCR로 모인 30%의 안전 자산
     boxx_rate = (1 + 0.053) ** (1/252) - 1 
     
     history, slot_details, trade_profits = [], [], []
@@ -65,41 +62,50 @@ def run_simulation(df, initial_seed, num_slots, pcr=0.7, start_limit_date=None, 
         p1, p2, curr_c, rsi_v = row['p1_c'], row['p2_c'], row['close'], row['rsi']
         x = np.ceil(((p1 + p2) * 1.01 / 1.99) * 100) / 100
         
+        # 모드 판정
         if rsi_v > 65: mode, b_l, s_l = "Ivy", x - 0.01, np.ceil((x * 1.03) * 100) / 100
         elif rsi_v > 45: mode, b_l, s_l = "Willow", x - 0.01, x
         elif rsi_v > 30: mode, b_l, s_l = "Lily", np.floor((x * 0.975) * 100) / 100, x
         else: mode, b_l, s_l = "Tulip", np.floor((x * 0.975) * 100) / 100, x
 
+        # 1. 매도 로직
         sold = False
         if shares > 0 and curr_c >= s_l:
             total_sell_val = shares * curr_c
             profit = total_sell_val - (avg_price * shares)
             trade_profits.append(profit)
             
-            # [PCR 로직 적용]
-            if profit > 0:
-                compounding_profit = profit * pcr
-                withdrawn_profit = profit * (1 - pcr)
-            else:
-                compounding_profit = profit # 손실은 100% 반영
-                withdrawn_profit = 0
-            
             # 원금 회수
             cash += (avg_price * shares)
             
-            if mode == "Ivy" and compounding_profit > 0:
-                ivy_reserve += compounding_profit # Ivy 모드에선 70%를 저축(BOXX)
+            if profit > 0:
+                # [익절 시] PCR 적용하여 수익 배분
+                compounding_profit = profit * pcr
+                withdrawn_profit = profit * (1 - pcr)
+                
+                if mode == "Ivy": ivy_reserve += compounding_profit
+                else: cash += compounding_profit
+                
+                safe_cash += withdrawn_profit # 30%는 보험금으로 저축
             else:
-                cash += compounding_profit # 그 외 모드에선 70%를 시드(Cash)에 합산
-            
-            safe_cash += withdrawn_profit # 30% 수익금은 안전 현금으로 확정
+                # [손절 시] 보험금 수령 로직 발동!
+                # 손실은 100% 캐시에서 깎고, 그동안 모은 safe_cash를 전액 수혈
+                cash += profit # 손실 반영 (음수값 더하기)
+                
+                # 보험금 투입 (소방수!)
+                if safe_cash > 0:
+                    cash += safe_cash
+                    # 시뮬레이션 기록을 위해 기록 남기기 가능
+                    safe_cash = 0.0 
             
             shares, used_slots, slot_cash, avg_price, slot_details = 0.0, 0, 0.0, 0.0, []
             sold = True
         
+        # 2. Tulip 진입 시 Ivy 비상금 투입
         if used_slots == 0 and mode == "Tulip" and ivy_reserve > 0:
             cash += ivy_reserve; ivy_reserve = 0.0
             
+        # 3. 매수 로직 (정량 매수)
         if not sold and used_slots < num_slots and curr_c <= b_l:
             if used_slots == 0: slot_cash = cash / num_slots
             buy_qty = slot_cash // b_l 
@@ -125,12 +131,11 @@ def run_simulation(df, initial_seed, num_slots, pcr=0.7, start_limit_date=None, 
 with st.sidebar:
     st.header("⚙️ 운용 설정")
     target_ticker = st.selectbox("종목 선택", ["SOXL", "USD"], index=0)
-    config_key = f"v5_5_pcr_{target_ticker}"
+    config_key = f"v6_final_{target_ticker}"
     saved = localS.getItem(config_key) or {"op_start": "2024-01-01", "init_seed": 10000.0, "num_slots": 5}
     num_slots = st.select_slider("매수 슬롯 분할 수", options=[3, 4, 5, 6], value=int(saved.get('num_slots', 5)))
     op_start = st.date_input("실제 운용 시작일", value=pd.to_datetime(saved['op_start']))
     init_seed = st.number_input("투자 원금 ($)", value=float(saved['init_seed']), step=1000.0)
-    # [추가] PCR 설정 슬라이더
     pcr_val = st.slider("PCR (수익 재투자 비율)", 0.0, 1.0, 0.7, 0.05)
     
     if st.button("💾 설정값 저장"):
@@ -139,7 +144,6 @@ with st.sidebar:
 
 tab1, tab2 = st.tabs(["🎯 실시간 현황 & 가이드", "📊 과거 데이터 기반 백테스트"])
 
-# --- TAB 1: 실시간 현황 ---
 with tab1:
     raw_df = get_processed_data(target_ticker, op_start.strftime('%Y-%m-%d'))
     if raw_df is not None:
@@ -152,53 +156,50 @@ with tab1:
             
             st.subheader(f"📊 {target_ticker} 현재 운용 현황")
             c1, c2, c3, c4 = st.columns(4)
-            c1.metric("전체 수익률", f"{(cur['Total']/init_seed-1)*100:+.2f}%")
+            c1.metric("수익률", f"{(cur['Total']/init_seed-1)*100:+.2f}%")
             c2.metric("평균 단가", f"${cur['Avg']:.2f}")
             c3.metric("채워진 슬롯", f"{int(cur['Slots'])} / {num_slots}")
             c4.metric("현재 총 자산", f"${cur['Total']:,.2f}")
             
             sc1, sc2 = st.columns(2)
             sc1.info(f"🏦 Ivy 비상금(BOXX): **${cur['Ivy']:,.2f}**")
-            sc2.success(f"🛡️ 안전 현금(PCR 30%): **${cur['Safe_Cash']:,.2f}**")
+            sc2.success(f"🛡️ 안전 현금(보험금): **${cur['Safe_Cash']:,.2f}**")
 
             if slots_live:
                 st.markdown("#### 📝 확정된 보유 슬롯 내역")
                 st.table(pd.DataFrame(slots_live))
 
             st.divider()
-            p1, p2, rsi_n = last_actual['p1_c'], last_actual['p2_c'], last_actual['rsi']
-            x = np.ceil(((p1 + p2) * 1.01 / 1.99) * 100) / 100
+            rsi_n = last_actual['rsi']
             mode, color = ("Ivy", "red") if rsi_n > 65 else ("Willow", "orange") if rsi_n > 45 else ("Lily", "blue") if rsi_n > 30 else ("Tulip", "purple")
-
             st.markdown(f"### 🎯 오늘의 실전 가이드 (현재 모드: :{color}[{mode}])")
-            st.write(f"🔍 **판단 근거:** QQQ RSI `{rsi_n:.2f}` | p1 `${p1:.2f}` | p2 `${p2:.2f}` | 기준 $x$ `${x:.2f}`")
+            st.write(f"🔍 **판단 근거:** QQQ RSI `{rsi_n:.2f}` | p1 `${last_actual['p1_c']:.2f}` | p2 `${last_actual['p2_c']:.2f}`")
             
-            # 매매 가이드 로직 (생략 없이 전문 포함)
+            # 매매 가이드 (생략 없음)
+            p1, p2 = last_actual['p1_c'], last_actual['p2_c']
+            x = np.ceil(((p1 + p2) * 1.01 / 1.99) * 100) / 100
             g1, g2 = st.columns(2)
             with g1:
                 b_p = x - 0.01 if rsi_n > 45 else np.floor((x * 0.975)*100)/100
                 st.success(f"#### 📥 {int(cur['Slots'])+1}회차 매수 (LOC)")
                 if cur['Slots'] < num_slots:
                     t_cash = cur['Cash'] / (num_slots - cur['Slots'])
-                    st.write(f"**매수 타점:** `${b_p:.2f}` 이하")
-                    st.write(f"**정량 수량:** `{int(t_cash // b_p)} 주` (고정)")
+                    st.write(f"**타점:** `${b_p:.2f}` 이하 | **정량:** `{int(t_cash // b_p)} 주`")
                 else: st.write("✅ 매수 완료")
             with g2:
                 s_p = np.ceil((x * 1.03)*100)/100 if rsi_n > 65 else x
                 st.error("#### 📤 전량 매도 (LOC)")
                 if cur['Shares'] > 0:
-                    st.write(f"**매도 타점:** `${s_p:.2f}` 이상")
-                    st.write(f"**대상 수량:** `{int(cur['Shares'])} 주`")
+                    st.write(f"**타점:** `${s_p:.2f}` 이상 | **수량:** `{int(cur['Shares'])} 주`")
                 else: st.write("보유 없음")
             st.line_chart(res_live[['Total', 'QQQ']])
 
-# --- TAB 2: 백테스트 ---
 with tab2:
     st.header("🔍 과거 데이터 기반 백테스트")
     col_b1, col_b2, col_b3 = st.columns(3)
     bt_start = col_b1.date_input("테스트 시작일", value=date(2013, 1, 1))
     bt_end = col_b2.date_input("테스트 종료일", value=date.today())
-    bt_seed = col_b3.number_input("테스트 원금 ($)", value=10000.0, step=1000.0)
+    bt_seed = col_b3.number_input("테스트 원금 ($)", value=10000.0)
     
     if st.button("🚀 백테스트 실행"):
         bt_raw = get_processed_data(target_ticker, bt_start.strftime('%Y-%m-%d'))
@@ -206,8 +207,7 @@ with tab2:
             res_b, _, trades = run_simulation(bt_raw, bt_seed, num_slots, pcr=pcr_val, start_limit_date=bt_start, end_limit_date=bt_end + timedelta(days=1))
             if not res_b.empty:
                 final_val = res_b['Total'].iloc[-1]
-                total_ret = (final_val / bt_seed - 1) * 100
-                days = (res_b.index[-1] - res_b.index[0]).days
+                total_ret, days = (final_val / bt_seed - 1) * 100, (res_b.index[-1] - res_b.index[0]).days
                 cagr = ((final_val / bt_seed) ** (365.25 / days) - 1) * 100
                 peak = res_b['Total'].cummax()
                 dd = (res_b['Total'] - peak) / peak
@@ -221,26 +221,26 @@ with tab2:
 
                 st.divider()
                 st.subheader("🏆 백테스트 종합 결과 리포트")
-                m_r1, m_r2, m_r3, m_r4 = st.columns(4)
-                m_r1.metric("최종 자산", f"${final_val:,.0f}")
-                m_r2.metric("총 수익률", f"{total_ret:.1f}%")
-                m_r3.metric("CAGR", f"{cagr:.2f}%")
-                m_r4.metric("승률", f"{win_rate:.1f}%")
+                m1, m2, m3, m4 = st.columns(4)
+                m1.metric("최종 자산", f"${final_val:,.0f}")
+                m2.metric("총 수익률", f"{total_ret:.1f}%")
+                m3.metric("CAGR", f"{cagr:.2f}%")
+                m4.metric("승률", f"{win_rate:.1f}%")
                 
-                m_r5, m_r6, m_r7, m_r8 = st.columns(4)
-                m_r5.metric("MDD", f"{mdd:.2f}%")
-                m_r6.metric("Average DD", f"{avg_dd:.2f}%")
-                m_r7.metric("손익비", f"{pl_ratio:.2f}")
-                m_r8.metric("안전 현금 (PCR)", f"${res_b['Safe_Cash'].iloc[-1]:,.0f}")
+                m5, m6, m7, m8 = st.columns(4)
+                m5.metric("MDD", f"{mdd:.2f}%")
+                m6.metric("Average DD", f"{avg_dd:.2f}%")
+                m7.metric("손익비", f"{pl_ratio:.2f}")
+                m8.metric("잔여 보험금", f"${res_b['Safe_Cash'].iloc[-1]:,.0f}")
 
                 st.line_chart(res_b[['Total', 'QQQ']])
                 
-                st.markdown("#### 📅 연도별 성과 리포트")
+                # 연도별 상세 테이블
                 res_b['year'] = res_b.index.year
                 yearly_stats = []
                 for yr in sorted(res_b['year'].unique()):
                     y_df = res_b[res_b['year'] == yr]
                     y_ret = (y_df['Total'].iloc[-1] / y_df['Total'].iloc[0] - 1) * 100
                     y_mdd = (y_df['Total'] / y_df['Total'].cummax() - 1).min() * 100
-                    yearly_stats.append({"연도": yr, "전략 수익률": f"{y_ret:.1f}%", "MDD": f"{y_mdd:.1f}%", "안전 현금 누적": f"${y_df['Safe_Cash'].iloc[-1]:,.0f}"})
+                    yearly_stats.append({"연도": yr, "수익률": f"{y_ret:.1f}%", "MDD": f"{y_mdd:.1f}%", "안전현금(누적)": f"${y_df['Safe_Cash'].iloc[-1]:,.0f}"})
                 st.table(pd.DataFrame(yearly_stats))
