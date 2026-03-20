@@ -15,10 +15,11 @@ localS = LocalStorage()
 # 한국 시간대 설정
 KST = pytz.timezone('Asia/Seoul')
 
-# --- 데이터 엔진 (시점 로직 강화) ---
-@st.cache_data(ttl=300)
+# --- 데이터 엔진 (최신 데이터 수집 및 캐시 최적화) ---
+@st.cache_data(ttl=60) # 최신 데이터 반영을 위해 캐시 유지 시간을 60초로 단축
 def get_processed_data(ticker, start_date):
     try:
+        # 가이드 계산을 위해 6개월 전부터 수집하되, 종료일을 내일로 설정하여 최신 데이터 포함
         fetch_start = pd.to_datetime(start_date) - pd.DateOffset(months=6)
         fetch_end = date.today() + timedelta(days=1)
         
@@ -34,19 +35,19 @@ def get_processed_data(ticker, start_date):
         df = pd.DataFrame(index=target_close.index)
         df['close'], df['qqq_close'] = target_close, qqq_close
         
-        # 확정된 과거 데이터만 사용하기 위해 shift 적용
+        # p1(전날), p2(전전날) 시프트 데이터 생성
         df['p1_c'], df['p2_c'] = df['close'].shift(1), df['close'].shift(2)
         
+        # RSI 14 계산
         delta = qqq_close.diff()
         gain = delta.where(delta > 0, 0).ewm(alpha=1/14, adjust=False).mean()
         loss = -delta.where(delta < 0, 0).ewm(alpha=1/14, adjust=False).mean()
-        
-        # 확정된 전일 종가 기준 RSI
+        # 시뮬레이션용(전일 기준) RSI
         df['rsi'] = (100 - (100 / (1 + (gain / loss.replace(0, np.nan))))).shift(1)
-        # 가이드용은 shift 없이 계산하되, 아래 tab1에서 확정된 마지막 행만 추출하여 사용
+        # 가이드용(현재 마감 기준) 최신 RSI
         df['rsi_live'] = (100 - (100 / (1 + (gain / loss.replace(0, np.nan)))))
         
-        return df 
+        return df # dropna는 시뮬레이션 직전에 수행
     except Exception as e:
         st.error(f"⚠️ 데이터 엔진 오류: {e}")
         return None
