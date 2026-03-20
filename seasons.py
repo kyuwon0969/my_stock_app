@@ -47,7 +47,7 @@ def get_processed_data(ticker, start_date):
         st.error(f"⚠️ 데이터 엔진 오류: {e}")
         return None
 
-# --- 시뮬레이션 엔진 (입금 보류 로직 및 인출 반영) ---
+# --- 시뮬레이션 엔진 (입출금 로직 반영) ---
 def run_simulation(df, initial_seed, num_slots, pcr=0.7, start_limit_date=None, end_limit_date=None, pending_dep=0.0, manual_withdrawn=0.0):
     if df is None or df.empty: return pd.DataFrame(), [], []
     
@@ -60,13 +60,13 @@ def run_simulation(df, initial_seed, num_slots, pcr=0.7, start_limit_date=None, 
 
     if sim_df.empty: return pd.DataFrame(), [], []
 
-    # [수정] 초기 현금에서 인출 금액 반영
+    # 초기 시드에서 수기 인출액 반영
     cash = float(initial_seed) - manual_withdrawn
     shares, used_slots, slot_cash, avg_price = 0.0, 0, 0.0, 0.0
     ivy_reserve, cumulative_withdrawn = 0.0, 0.0 
     boxx_rate = (1 + 0.053) ** (1/252) - 1 
     
-    # [수정] 추가 입금 보류 로직용 변수
+    # 추가 입금 보류 로직용 변수
     internal_pending = float(pending_dep)
     
     history, slot_details, trade_profits = [], [], []
@@ -100,7 +100,7 @@ def run_simulation(df, initial_seed, num_slots, pcr=0.7, start_limit_date=None, 
             shares, used_slots, slot_cash, avg_price, slot_details = 0.0, 0, 0.0, 0.0, []
             sold = True
         
-        # [수정] 차기 사이클 시작 시 보류된 입금액 투입
+        # [추가 금액 로직] 차기 사이클 시작 시 보류된 입금액 자동 투입
         if used_slots == 0 and internal_pending > 0:
             cash += internal_pending
             internal_pending = 0.0
@@ -135,36 +135,30 @@ with st.sidebar:
     target_ticker = st.selectbox("종목 선택", ["SOXL", "USD"], index=0)
     config_key = f"v5_final_pro_{target_ticker}"
     
-    # Local Storage 데이터 로드 및 초기값 설정
-    saved = localS.getItem(config_key) or {
-        "op_start": "2024-01-01", 
-        "init_seed": 10000.0, 
-        "num_slots": 5, 
-        "pcr": 0.7,
-        "pending_dep": 0.0,
-        "manual_withdrawn": 0.0
-    }
+    # 1. Local Storage 데이터 로드
+    saved = localS.getItem(config_key) or {}
     
-    num_slots = st.select_slider("매수 슬롯 분할 수", options=[3, 4, 5, 6], value=int(saved.get('num_slots', 5)))
-    op_start = st.date_input("실제 운용 시작일", value=pd.to_datetime(saved.get('op_start', "2024-01-01")))
-    init_seed = st.number_input("투자 원금 ($)", value=float(saved.get('init_seed', 10000.0)), step=1000.0)
-    pcr_val = st.slider("PCR (재투자 비중)", 0.0, 1.0, float(saved.get('pcr', 0.7)), 0.05)
+    # [새로고침 초기화 방지] 세션 브릿지 로직: 컴포넌트 로드 전까지 이전 세션값 유지
+    if saved:
+        for k, v in saved.items(): st.session_state[f"st_{k}_{target_ticker}"] = v
+
+    # 위젯 기본값 설정 (저장된 값 -> 세션 값 -> 하드코딩 기본값 순)
+    def get_v(key, default): return st.session_state.get(f"st_{key}_{target_ticker}", saved.get(key, default))
+
+    num_slots = st.select_slider("매수 슬롯 분할 수", options=[3, 4, 5, 6], value=int(get_v('num_slots', 5)))
+    op_start = st.date_input("실제 운용 시작일", value=pd.to_datetime(get_v('op_start', "2024-01-01")).date())
+    init_seed = st.number_input("투자 원금 ($)", value=float(get_v('init_seed', 10000.0)), step=1000.0)
+    pcr_val = st.slider("PCR (재투자 비중)", 0.0, 1.0, float(get_v('pcr', 0.7)), 0.05)
     
     st.divider()
     st.subheader("💰 수기 자금 관리")
-    p_dep = st.number_input("보류 중인 추가 입금액 ($)", value=float(saved.get('pending_dep', 0.0)), help="입력 시 다음 매도 완료(현금 100%) 시점에 자동 합류됩니다.")
-    
-    # 인출 가능 여부 판단을 위한 변수 선언 (tab1에서 갱신됨)
-    m_with = float(saved.get('manual_withdrawn', 0.0))
-    
+    p_dep = st.number_input("보류 중인 추가 입금액 ($)", value=float(get_v('pending_dep', 0.0)), help="입력 시 다음 매도 완료 시점에 자동 합류됩니다.")
+    m_with = float(get_v('manual_withdrawn', 0.0)) # 인출금 데이터 로드
+
     if st.button("💾 설정값 저장 및 강제 새로고침"):
         localS.setItem(config_key, {
-            "op_start": op_start.strftime('%Y-%m-%d'), 
-            "init_seed": init_seed, 
-            "num_slots": num_slots,
-            "pcr": pcr_val,
-            "pending_dep": p_dep,
-            "manual_withdrawn": m_with # 인출금은 별도 로직으로 저장됨
+            "op_start": op_start.strftime('%Y-%m-%d'), "init_seed": init_seed, 
+            "num_slots": num_slots, "pcr": pcr_val, "pending_dep": p_dep, "manual_withdrawn": m_with
         })
         st.cache_data.clear()
         st.rerun()
@@ -176,13 +170,11 @@ with tab1:
     if raw_df is not None:
         now_kst = datetime.now(KST).strftime('%Y-%m-%d %H:%M:%S')
         today_val = date.today()
-        # 시뮬레이션 실행 (입금 및 인출 반영)
         res_live, slots_live, _ = run_simulation(raw_df, init_seed, num_slots, pcr=pcr_val, start_limit_date=op_start, end_limit_date=today_val, pending_dep=p_dep, manual_withdrawn=m_with)
         
         if not res_live.empty:
             cur = res_live.iloc[-1]
-            latest_row = raw_df.iloc[-1]
-            prev_row = raw_df.iloc[-2]
+            latest_row, prev_row = raw_df.iloc[-1], raw_df.iloc[-2]
             p1_val, p2_val = latest_row['close'], prev_row['close']
             rsi_val = latest_row['rsi_live']
             
@@ -197,17 +189,19 @@ with tab1:
             
             st.info(f"🏦 Ivy 비상금: **${cur['Ivy']:,.2f}** | 💸 PCR 인출액: **${cur['Withdrawn']:,.2f}**")
             
-            # [요청 기능] 인출 금액 수기 입력 (슬롯 0개일 때만 활성화)
+            # [요청 기능] 수기 인출 (슬롯 0개일 때만 가능)
             if int(cur['Slots']) == 0:
-                st.success("✅ 현재 모든 슬롯이 비어 있어 '인출'이 가능합니다.")
+                st.success("✅ 현재 현금 100% 상태입니다. '인출'이 가능합니다.")
                 new_withdraw = st.number_input("수기 인출 금액 입력 ($)", value=m_with, step=100.0)
                 if new_withdraw != m_with:
-                    saved['manual_withdrawn'] = new_withdraw
-                    localS.setItem(config_key, saved)
-                    st.warning("인출 금액이 반영되었습니다. 페이지를 새로고침하세요.")
-                    if st.button("즉시 반영"): st.rerun()
+                    localS.setItem(config_key, {
+                        "op_start": op_start.strftime('%Y-%m-%d'), "init_seed": init_seed, 
+                        "num_slots": num_slots, "pcr": pcr_val, "pending_dep": p_dep, "manual_withdrawn": new_withdraw
+                    })
+                    st.warning("인출 금액이 저장되었습니다. 즉시 반영하려면 버튼을 누르세요.")
+                    if st.button("새로고침 반영"): st.rerun()
             else:
-                st.error("⚠️ 주식을 보유 중인 사이클 내에서는 '인출' 기능을 사용할 수 없습니다.")
+                st.error("⚠️ 주식 보유 중(사이클 진행 중)에는 '인출' 기능을 사용할 수 없습니다.")
 
             if slots_live:
                 st.markdown("#### 📝 확정된 보유 슬롯 내역")
@@ -217,9 +211,7 @@ with tab1:
             x = np.ceil(((p1_val + p2_val) * 1.01 / 1.99) * 100) / 100
             mode, color = ("Ivy", "red") if rsi_val > 65 else ("Willow", "orange") if rsi_val > 45 else ("Lily", "blue") if rsi_val > 30 else ("Tulip", "purple")
             st.markdown(f"### 🎯 오늘의 실전 가이드 (현재 모드: :{color}[{mode}])")
-            st.write(f"🔍 **판단 근거:** QQQ RSI `{rsi_val:.2f}`")
-            st.write(f"📈 **p1 (어제):** `${p1_val:.2f}` | **p2 (그저께):** `${p2_val:.2f}`")
-            st.write(f"📐 **기준 x값:** `${x:.2f}`")
+            st.write(f"🔍 **판단 근거:** QQQ RSI `{rsi_val:.2f}` | p1 `${p1_val:.2f}` | p2 `${p2_val:.2f}` | 기준 x값 `${x:.2f}`")
             
             g1, g2 = st.columns(2)
             with g1:
@@ -240,7 +232,7 @@ with tab1:
 with tab2:
     st.header("🔍 과거 데이터 기반 백테스트")
     col_b1, col_b2, col_b3 = st.columns(3)
-    bt_start = col_b1.date_input("테스트 시작일", value=pd.to_datetime(bt_start) if 'bt_start' in locals() else date(2013, 1, 1))
+    bt_start = col_b1.date_input("테스트 시작일", value=date(2013, 1, 1))
     bt_end = col_b2.date_input("테스트 종료일", value=date.today())
     bt_seed = col_b3.number_input("테스트 원금 ($)", value=10000.0)
     
@@ -249,9 +241,8 @@ with tab2:
         if bt_raw is not None:
             res_b, _, trades = run_simulation(bt_raw, bt_seed, num_slots, pcr=pcr_val, start_limit_date=bt_start, end_limit_date=bt_end + timedelta(days=1), pending_dep=0.0, manual_withdrawn=0.0)
             if not res_b.empty:
-                final_val, withdrawn = res_b['Total'].iloc[-1], res_b['Withdrawn'].iloc[-1]
-                days = (res_b.index[-1] - res_b.index[0]).days
-                cagr = ((final_val / bt_seed) ** (365.25 / days) - 1) * 100
+                f_val, withdrawn = res_b['Total'].iloc[-1], res_b['Withdrawn'].iloc[-1]
+                cagr = ((f_val / bt_seed) ** (365.25 / (res_b.index[-1] - res_b.index[0]).days) - 1) * 100
                 peak = res_b['Total'].cummax()
                 dd = (res_b['Total'] - peak) / peak
                 mdd, avg_dd = dd.min() * 100, dd[dd < 0].mean() * 100
@@ -266,18 +257,16 @@ with tab2:
                 st.subheader("🏆 백테스트 종합 결과")
                 st.caption(f"ℹ️ 적용된 오늘 환율: {today_fx:,.2f}원")
                 
-                m_row1_1, m_row1_2, m_row1_3 = st.columns(3)
-                m_row1_1.metric("초기 자산", f"${bt_seed:,.0f}")
-                m_row1_1.markdown(f"<p style='font-size: 0.85rem; color: gray; margin-top: -15px;'>({int(bt_seed * today_fx):,}원)</p>", unsafe_allow_html=True)
-                m_row1_2.metric("최종 자산", f"${final_val:,.0f}")
-                m_row1_2.markdown(f"<p style='font-size: 0.85rem; color: gray; margin-top: -15px;'>({int(final_val * today_fx):,}원)</p>", unsafe_allow_html=True)
-                m_row1_3.metric("CAGR (연복리)", f"{cagr:.2f}%")
+                m1, m2, m3 = st.columns(3)
+                m1.metric("초기 자산", f"${bt_seed:,.0f}")
+                m1.markdown(f"<p style='font-size: 0.85rem; color: gray; margin-top: -15px;'>({int(bt_seed * today_fx):,}원)</p>", unsafe_allow_html=True)
+                m2.metric("최종 자산", f"${f_val:,.0f}")
+                m2.markdown(f"<p style='font-size: 0.85rem; color: gray; margin-top: -15px;'>({int(f_val * today_fx):,}원)</p>", unsafe_allow_html=True)
+                m3.metric("CAGR (연복리)", f"{cagr:.2f}%")
                 
-                m_row2_1, m_row2_2, m_row2_3, m_row2_4 = st.columns(4)
-                m_row2_1.metric("MDD", f"{mdd:.2f}%")
-                m_row2_2.metric("Average DD", f"{avg_dd:.2f}%")
-                m_row2_3.metric("Calmar Ratio", f"{calmar:.2f}")
-                m_row2_4.metric("총 인출 현금", f"${withdrawn:,.0f}")
+                m4, m5, m6, m7 = st.columns(4)
+                m4.metric("MDD", f"{mdd:.2f}%"); m5.metric("Average DD", f"{avg_dd:.2f}%")
+                m6.metric("Calmar Ratio", f"{calmar:.2f}"); m7.metric("총 인출 현금", f"${withdrawn:,.0f}")
 
                 st.line_chart(res_b[['Total', 'QQQ']])
                 res_b['year'] = res_b.index.year
