@@ -15,7 +15,7 @@ localS = LocalStorage()
 # 한국 시간대 설정
 KST = pytz.timezone('Asia/Seoul')
 
-# --- 데이터 엔진 (그 전의 성공적인 코드 로직 복구) ---
+# --- 데이터 엔진 (기존의 성공적인 코드 로직 복구) ---
 @st.cache_data(ttl=300)
 def get_processed_data(ticker, start_date):
     try:
@@ -34,7 +34,7 @@ def get_processed_data(ticker, start_date):
         df = pd.DataFrame(index=target_close.index)
         df['close'], df['qqq_close'] = target_close, qqq_close
         
-        # [복구] 시뮬레이션 루프용 shift 데이터 생성
+        # [복구] 시뮬레이션용 shift 데이터
         df['p1_c'], df['p2_c'] = df['close'].shift(1), df['close'].shift(2)
         
         delta = qqq_close.diff()
@@ -43,7 +43,7 @@ def get_processed_data(ticker, start_date):
         
         # 시뮬레이션용 (전일 기준) RSI
         df['rsi'] = (100 - (100 / (1 + (gain / loss.replace(0, np.nan))))).shift(1)
-        # 가이드용 (현재 마감 확정 기준) 최신 RSI
+        # 가이드용 (해당 날짜 확정 기준) RSI
         df['rsi_live'] = (100 - (100 / (1 + (gain / loss.replace(0, np.nan)))))
         
         return df 
@@ -51,7 +51,7 @@ def get_processed_data(ticker, start_date):
         st.error(f"⚠️ 데이터 엔진 오류: {e}")
         return None
 
-# --- 시뮬레이션 엔진 (입출금 통합 로직 반영) ---
+# --- 시뮬레이션 엔진 ---
 def run_simulation(df, initial_seed, num_slots, pcr=0.7, start_limit_date=None, end_limit_date=None, pending_dep=0.0, manual_withdrawn=0.0):
     if df is None or df.empty: return pd.DataFrame(), [], []
     
@@ -102,7 +102,6 @@ def run_simulation(df, initial_seed, num_slots, pcr=0.7, start_limit_date=None, 
             shares, used_slots, slot_cash, avg_price, slot_details = 0.0, 0, 0.0, 0.0, []
             sold = True
         
-        # 차기 사이클 시작 시 보류된 입금/인출액 자동 투입 (음수 지원)
         if used_slots == 0 and internal_pending != 0:
             cash += internal_pending
             internal_pending = 0.0
@@ -165,21 +164,22 @@ with tab1:
     if raw_df is not None:
         now_kst = datetime.now(KST).strftime('%Y-%m-%d %H:%M:%S')
         today_val = date.today()
-        # 시뮬레이션 실행
         res_live, slots_live, _ = run_simulation(raw_df, init_seed, num_slots, pcr=pcr_val, start_limit_date=op_start, end_limit_date=today_val, pending_dep=p_dep, manual_withdrawn=0.0)
         
         if not res_live.empty:
             cur = res_live.iloc[-1]
-            # [복구] 성공적이었던 가이드 변수 할당 로직
-            clean_df = raw_df.dropna(subset=['rsi_live'])
-            latest_row, prev_row = clean_df.iloc[-1], clean_df.iloc[-2]
             
-            p1_val, p1_date = latest_row['close'], clean_df.index[-1].strftime('%Y-%m-%d')
-            p2_val, p2_date = prev_row['close'], clean_df.index[-2].strftime('%Y-%m-%d')
-            rsi_val = latest_row['rsi_live']
+            # [핵심 수정] 실시간 가이드용 데이터 추출 로직
+            # yfinance는 마지막 마감 세션을 가져오므로, 마지막 행이 '전날' 데이터임
+            latest_data = raw_df.iloc[-1]
+            prev_data = raw_df.iloc[-2]
+            
+            p1_val, p1_date = latest_data['close'], raw_df.index[-1].strftime('%Y-%m-%d')
+            p2_val, p2_date = prev_data['close'], raw_df.index[-2].strftime('%Y-%m-%d')
+            rsi_val = latest_data['rsi_live'] # 전날 마감 기준 확정 RSI
             
             st.subheader(f"📊 {target_ticker} 현재 운용 현황")
-            st.caption(f"🕒 최종 업데이트 (KST): {now_kst} | 기준 데이터: {p1_date} 종가 및 RSI 반영")
+            st.caption(f"🕒 최종 업데이트 (KST): {now_kst} | 기준 데이터: {p1_date} 종가 반영")
             
             c1, c2, c3, c4 = st.columns(4)
             c1.metric("총 수익률", f"{(cur['Total']/init_seed-1)*100:+.2f}%")
@@ -198,7 +198,7 @@ with tab1:
             x = np.ceil(((p1_val + p2_val) * 1.01 / 1.99) * 100) / 100
             mode, color = ("Ivy", "red") if rsi_val > 65 else ("Willow", "orange") if rsi_val > 45 else ("Lily", "blue") if rsi_val > 30 else ("Tulip", "purple")
             st.markdown(f"### 🎯 오늘의 실전 가이드 (현재 모드: :{color}[{mode}])")
-            st.write(f"🔍 **판단 근거:** 확정 RSI `{rsi_val:.2f}` | p1(어제) `${p1_val:.2f}` ({p1_date}) | p2(그저께) `${p2_val:.2f}` ({p2_date}) | 기준 x값 `${x:.2f}`")
+            st.write(f"🔍 **판단 근거:** 전일 RSI `{rsi_val:.2f}` | p1(전날) `${p1_val:.2f}` | p2(전전날) `${p2_val:.2f}` | 기준 x값 `${x:.2f}`")
             
             g1, g2 = st.columns(2)
             with g1:
@@ -230,8 +230,7 @@ with tab2:
             if not res_b.empty:
                 f_val, withdrawn = res_b['Total'].iloc[-1], res_b['Withdrawn'].iloc[-1]
                 cagr = ((f_val / bt_seed) ** (365.25 / (res_b.index[-1] - res_b.index[0]).days) - 1) * 100
-                peak = res_b['Total'].cummax()
-                mdd = (res_b['Total'] / peak - 1).min() * 100
+                mdd = (res_b['Total'] / res_b['Total'].cummax() - 1).min() * 100
                 try:
                     fx_data = yf.download("USDKRW=X", period="1d", progress=False)
                     today_fx = float(fx_data['Close'].iloc[-1])
