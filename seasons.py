@@ -39,9 +39,9 @@ def get_processed_data(ticker, start_date):
         st.error(f"⚠️ 데이터 엔진 오류: {e}")
         return None
 
-# --- 시뮬레이션 엔진 (정량 매수 + BOXX 이자) ---
+# --- 시뮬레이션 엔진 ---
 def run_simulation(df, initial_seed, num_slots, start_limit_date=None, end_limit_date=None):
-    if df is None or df.empty: return pd.DataFrame(), []
+    if df is None or df.empty: return pd.DataFrame(), [], []
     
     sim_df = df.copy()
     if start_limit_date:
@@ -49,13 +49,13 @@ def run_simulation(df, initial_seed, num_slots, start_limit_date=None, end_limit
     if end_limit_date:
         sim_df = sim_df[sim_df.index.date < end_limit_date]
 
-    if sim_df.empty: return pd.DataFrame(), []
+    if sim_df.empty: return pd.DataFrame(), [], []
 
     cash, shares, used_slots, slot_cash, avg_price = float(initial_seed), 0.0, 0, 0.0, 0.0
     ivy_reserve = 0.0
     boxx_rate = (1 + 0.053) ** (1/252) - 1 
     
-    history, slot_details = [], []
+    history, slot_details, trade_profits = [], [], []
     qqq_start_p = float(sim_df['qqq_close'].iloc[0])
     
     for date_idx, row in sim_df.iterrows():
@@ -72,6 +72,7 @@ def run_simulation(df, initial_seed, num_slots, start_limit_date=None, end_limit
         sold = False
         if shares > 0 and curr_c >= s_l:
             profit = (shares * curr_c) - (avg_price * shares)
+            trade_profits.append(profit) # 승률/손익비 계산용
             cash += (avg_price * shares)
             if mode == "Ivy" and profit > 0: ivy_reserve += profit
             else: cash += profit
@@ -99,13 +100,13 @@ def run_simulation(df, initial_seed, num_slots, start_limit_date=None, end_limit
             'Cash': cash, 'Shares': shares, 'Slots': used_slots, 'Avg': avg_price,
             'QQQ': (initial_seed / qqq_start_p) * row['qqq_close'], 'Ivy': ivy_reserve
         })
-    return pd.DataFrame(history).set_index('Date'), slot_details
+    return pd.DataFrame(history).set_index('Date'), slot_details, trade_profits
 
 # --- UI 레이아웃 ---
 with st.sidebar:
     st.header("⚙️ 운용 설정")
     target_ticker = st.selectbox("종목 선택", ["SOXL", "USD"], index=0)
-    config_key = f"v4_7_final_{target_ticker}"
+    config_key = f"v5_final_{target_ticker}"
     saved = localS.getItem(config_key) or {"op_start": "2024-01-01", "init_seed": 10000.0, "num_slots": 5}
     num_slots = st.select_slider("매수 슬롯 분할 수", options=[3, 4, 5, 6], value=int(saved.get('num_slots', 5)))
     op_start = st.date_input("실제 운용 시작일", value=pd.to_datetime(saved['op_start']))
@@ -116,11 +117,12 @@ with st.sidebar:
 
 tab1, tab2 = st.tabs(["🎯 실시간 현황 & 가이드", "📊 과거 데이터 기반 백테스트"])
 
+# --- TAB 1: 실시간 현황 ---
 with tab1:
     raw_df = get_processed_data(target_ticker, op_start.strftime('%Y-%m-%d'))
     if raw_df is not None:
         today_val = date.today()
-        res_live, slots_live = run_simulation(raw_df, init_seed, num_slots, start_limit_date=op_start, end_limit_date=today_val)
+        res_live, slots_live, _ = run_simulation(raw_df, init_seed, num_slots, start_limit_date=op_start, end_limit_date=today_val)
         
         if not res_live.empty:
             cur = res_live.iloc[-1]
@@ -141,14 +143,11 @@ with tab1:
             st.divider()
             p1, p2, rsi_n = last_actual['p1_c'], last_actual['p2_c'], last_actual['rsi']
             x = np.ceil(((p1 + p2) * 1.01 / 1.99) * 100) / 100
-            
-            # [수정] 현재 모드 판정 로직
             if rsi_n > 65: mode, color = "Ivy", "red"
             elif rsi_n > 45: mode, color = "Willow", "orange"
             elif rsi_n > 30: mode, color = "Lily", "blue"
             else: mode, color = "Tulip", "purple"
 
-            # [수정] 헤더에서 RSI 제거 후 모드 표시, RSI는 판단 근거로 이동
             st.markdown(f"### 🎯 오늘의 실전 가이드 (현재 모드: :{color}[{mode}])")
             st.write(f"🔍 **판단 근거:** QQQ RSI `{rsi_n:.2f}` | p1 `${p1:.2f}` | p2 `${p2:.2f}` | 기준 $x$ `${x:.2f}`")
             
@@ -170,6 +169,7 @@ with tab1:
                 else: st.write("보유 물량 없음")
             st.line_chart(res_live[['Total', 'QQQ']])
 
+# --- TAB 2: 백테스트 ---
 with tab2:
     st.header("🔍 과거 데이터 기반 백테스트")
     col_b1, col_b2, col_b3 = st.columns(3)
@@ -180,22 +180,44 @@ with tab2:
     if st.button("🚀 백테스트 실행"):
         bt_raw = get_processed_data(target_ticker, bt_start.strftime('%Y-%m-%d'))
         if bt_raw is not None:
-            res_b, _ = run_simulation(bt_raw, bt_seed, num_slots, start_limit_date=bt_start, end_limit_date=bt_end + timedelta(days=1))
+            res_b, _, trades = run_simulation(bt_raw, bt_seed, num_slots, start_limit_date=bt_start, end_limit_date=bt_end + timedelta(days=1))
             if not res_b.empty:
                 final_val = res_b['Total'].iloc[-1]
                 total_profit = final_val - bt_seed
                 total_ret = (final_val / bt_seed - 1) * 100
                 days = (res_b.index[-1] - res_b.index[0]).days
-                cagr = ((final_val / bt_seed) ** (365.25 / (days if days > 0 else 1)) - 1) * 100
-                mdd = (res_b['Total'] / res_b['Total'].cummax() - 1).min() * 100
+                cagr = ((final_val / bt_seed) ** (365.25 / days) - 1) * 100
+                
+                # Drawdown 계산
+                peak = res_b['Total'].cummax()
+                dd = (res_b['Total'] - peak) / peak
+                mdd = dd.min() * 100
+                avg_dd = dd[dd < 0].mean() * 100 # [추가] Average DD
+                
+                # [추가] 승률 및 손익비 계산
+                if trades:
+                    wins = [t for t in trades if t > 0]
+                    losses = [t for t in trades if t <= 0]
+                    win_rate = (len(wins) / len(trades)) * 100
+                    avg_win = np.mean(wins) if wins else 0
+                    avg_loss = abs(np.mean(losses)) if losses else 0
+                    pl_ratio = avg_win / avg_loss if avg_loss != 0 else float('inf')
+                else:
+                    win_rate, pl_ratio = 0, 0
 
                 st.divider()
                 st.subheader("🏆 백테스트 종합 결과 리포트")
-                m_c1, m_c2, m_c3, m_c4 = st.columns(4)
-                m_c1.metric("최종 자산", f"${final_val:,.0f}")
-                m_c2.metric("총 수익금", f"${total_profit:,.0f}")
-                m_c3.metric("CAGR", f"{cagr:.2f}%")
-                m_c4.metric("전체 MDD", f"{mdd:.2f}%")
+                m_r1, m_r2, m_r3, m_r4 = st.columns(4)
+                m_r1.metric("최종 자산", f"${final_val:,.0f}")
+                m_r2.metric("총 수익금", f"${total_profit:,.0f}")
+                m_r3.metric("CAGR (연복리)", f"{cagr:.2f}%")
+                m_r4.metric("승률 (Win Rate)", f"{win_rate:.1f}%")
+                
+                m_r5, m_r6, m_r7, m_r8 = st.columns(4)
+                m_r5.metric("MDD", f"{mdd:.2f}%")
+                m_r6.metric("Average DD", f"{avg_dd:.2f}%")
+                m_r7.metric("손익비 (P/L Ratio)", f"{pl_ratio:.2f}")
+                m_r8.metric("총 매매 횟수", f"{len(trades)}회")
 
                 st.markdown("#### 📈 자산 성장 곡선 (Strategy vs QQQ)")
                 st.line_chart(res_b[['Total', 'QQQ']])
