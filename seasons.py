@@ -169,18 +169,19 @@ with tab1:
         
         if not res_live.empty:
             cur = res_live.iloc[-1]
-            # [수정] 장중 불완전 데이터를 제외하고 확정된 마지막 2개 행만 추출
-            clean_df = raw_df.dropna(subset=['rsi_live'])
-            latest_row = clean_df.iloc[-1]
-            prev_row = clean_df.iloc[-2]
+            # [핵심 수정] 마지막 행(가장 최신 데이터)을 기준으로 시뮬레이션 변수에서 역산 추출
+            # 만약 Yahoo Finance 데이터에 '오늘' 데이터가 포함되어 있다면 p1_c는 정확히 '어제 종가'가 됨
+            latest_row = raw_df.iloc[-1]
             
-            # 확정된 전일 종가(p1)와 전전일 종가(p2), 그리고 전일 RSI
-            p1_val, p1_date = latest_row['close'], clean_df.index[-1].strftime('%Y-%m-%d')
-            p2_val, p2_date = prev_row['close'], clean_df.index[-2].strftime('%Y-%m-%d')
-            rsi_val = latest_row['rsi_live']
+            p1_val = latest_row['p1_c']     # 어제 마감 종가
+            p2_val = latest_row['p2_c']     # 그저께 마감 종가
+            rsi_val = latest_row['rsi']     # 어제 마감 확정 RSI
             
+            # 기준 날짜 추출 (어제 날짜)
+            p1_date = (raw_df.index[-1] - timedelta(days=0)).strftime('%Y-%m-%d') if 'p1_c' in latest_row else "Data Error"
+
             st.subheader(f"📊 {target_ticker} 현재 운용 현황")
-            st.caption(f"🕒 최종 업데이트 (KST): {now_kst} | 확정 기준일: {p1_date}")
+            st.caption(f"🕒 최종 업데이트 (KST): {now_kst} | 기준 데이터: {p1_date} 종가 및 RSI 반영")
             
             c1, c2, c3, c4 = st.columns(4)
             c1.metric("총 수익률", f"{(cur['Total']/init_seed-1)*100:+.2f}%")
@@ -210,7 +211,7 @@ with tab1:
             x = np.ceil(((p1_val + p2_val) * 1.01 / 1.99) * 100) / 100
             mode, color = ("Ivy", "red") if rsi_val > 65 else ("Willow", "orange") if rsi_val > 45 else ("Lily", "blue") if rsi_val > 30 else ("Tulip", "purple")
             st.markdown(f"### 🎯 오늘의 실전 가이드 (현재 모드: :{color}[{mode}])")
-            st.write(f"🔍 **판단 근거:** 확정 RSI `{rsi_val:.2f}` | p1 `${p1_val:.2f}` ({p1_date}) | p2 `${p2_val:.2f}` ({p2_date}) | 기준 x값 `${x:.2f}`")
+            st.write(f"🔍 **판단 근거:** 전일 RSI `{rsi_val:.2f}` | p1(어제) `${p1_val:.2f}` | p2(그저께) `${p2_val:.2f}` | 기준 x값 `${x:.2f}`")
             
             g1, g2 = st.columns(2)
             with g1:
