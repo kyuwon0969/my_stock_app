@@ -15,7 +15,7 @@ localS = LocalStorage()
 # 한국 시간대 설정
 KST = pytz.timezone('Asia/Seoul')
 
-# --- 데이터 엔진 (기존 유지) ---
+# --- 데이터 엔진 ---
 @st.cache_data(ttl=300)
 def get_processed_data(ticker, start_date):
     try:
@@ -47,7 +47,7 @@ def get_processed_data(ticker, start_date):
         st.error(f"⚠️ 데이터 엔진 오류: {e}")
         return None
 
-# --- 시뮬레이션 엔진 (기존 로직 100% 유지) ---
+# --- 시뮬레이션 엔진 ---
 def run_simulation(df, initial_seed, num_slots, pcr=0.7, start_limit_date=None, end_limit_date=None):
     if df is None or df.empty: return pd.DataFrame(), [], []
     
@@ -215,17 +215,29 @@ with tab2:
                 avg_dd = dd[dd < 0].mean() * 100
                 calmar = cagr / abs(mdd) if mdd != 0 else 0
                 
-                # 환율 상수를 통한 원화 환산 (1,350원 기준)
-                FX_CONST = 1350
-                seed_krw = bt_seed * FX_CONST
-                final_krw = final_val * FX_CONST
+                # [수정] 오늘 실시간 환율 정보 가져오기
+                try:
+                    fx_data = yf.download("USDKRW=X", period="1d", progress=False)
+                    today_fx = float(fx_data['Close'].iloc[-1])
+                except:
+                    today_fx = 1350.0 # 에러 대비 기본값
+                
+                seed_krw = bt_seed * today_fx
+                final_krw = final_val * today_fx
 
                 st.divider()
                 st.subheader("🏆 백테스트 종합 결과")
+                # [요청] 오늘 환율 정보 작게 표시
+                st.caption(f"ℹ️ 적용된 오늘 환율: {today_fx:,.2f}원")
                 
                 m_row1_1, m_row1_2, m_row1_3 = st.columns(3)
-                m_row1_1.metric("초기 자산", f"${bt_seed:,.0f} ({int(seed_krw):,}원)")
-                m_row1_2.metric("최종 자산", f"${final_val:,.0f} ({int(final_krw):,}원)")
+                m_row1_1.metric("초기 자산", f"${bt_seed:,.0f}")
+                # [요청] 원화 표기 작게 HTML 적용
+                m_row1_1.markdown(f"<p style='font-size: 0.85rem; color: gray; margin-top: -15px;'>({int(seed_krw):,}원)</p>", unsafe_allow_html=True)
+                
+                m_row1_2.metric("최종 자산", f"${final_val:,.0f}")
+                m_row1_2.markdown(f"<p style='font-size: 0.85rem; color: gray; margin-top: -15px;'>({int(final_krw):,}원)</p>", unsafe_allow_html=True)
+                
                 m_row1_3.metric("CAGR (연복리)", f"{cagr:.2f}%")
                 
                 m_row2_1, m_row2_2, m_row2_3, m_row2_4 = st.columns(4)
