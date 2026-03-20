@@ -5,20 +5,19 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.stats import norm, skew, kurtosis
 from datetime import datetime, date, timedelta
-import pytz # 시간대 처리를 위해 추가
+import pytz 
 from streamlit_local_storage import LocalStorage
 
 # 1. 페이지 설정
 st.set_page_config(page_title="사계절 전략 Pro", page_icon="🌿", layout="wide")
 localS = LocalStorage()
-
-# 한국 시간대 설정
 KST = pytz.timezone('Asia/Seoul')
 
-# --- 데이터 엔진 (기존 유지하되 시점 로직 강화) ---
-@st.cache_data(ttl=300)
+# --- 데이터 엔진 (사용자가 제공한 정상 작동 버전으로 완전 교체) ---
+@st.cache_data(ttl=60)
 def get_processed_data(ticker, start_date):
     try:
+        # 데이터 수집 (종료일을 내일로 설정하여 최신 데이터 확보)
         fetch_start = pd.to_datetime(start_date) - pd.DateOffset(months=6)
         fetch_end = date.today() + timedelta(days=1)
         
@@ -34,28 +33,31 @@ def get_processed_data(ticker, start_date):
         df = pd.DataFrame(index=target_close.index)
         df['close'], df['qqq_close'] = target_close, qqq_close
         
-        # [수정] 확정된 과거 데이터만 사용하기 위해 shift 적용
-        df['p1_c'], df['p2_c'] = df['close'].shift(1), df['close'].shift(2)
-        
-        delta = qqq_close.diff()
+        # RSI 계산 로직
+        delta = df['qqq_close'].diff()
         gain = delta.where(delta > 0, 0).ewm(alpha=1/14, adjust=False).mean()
         loss = -delta.where(delta < 0, 0).ewm(alpha=1/14, adjust=False).mean()
         
-        # [수정] 확정된 전일 종가 기준 RSI
-        df['rsi'] = (100 - (100 / (1 + (gain / loss.replace(0, np.nan))))).shift(1)
-        # 가이드용은 shift 없이 계산하되, 아래 tab1에서 확정된 마지막 행만 추출하여 사용
+        # 시뮬레이션용 RSI (전일 기준)
+        df['rsi_sim'] = (100 - (100 / (1 + (gain / loss.replace(0, np.nan))))).shift(1)
+        # 가이드용 최신 RSI (오늘 매매 판단 기준)
         df['rsi_live'] = (100 - (100 / (1 + (gain / loss.replace(0, np.nan)))))
+        
+        # p1, p2 데이터 생성
+        df['p1_raw'] = df['close'].shift(0) # 가장 최근 확정 종가
+        df['p2_raw'] = df['close'].shift(1) # 그 이전 종가
         
         return df 
     except Exception as e:
         st.error(f"⚠️ 데이터 엔진 오류: {e}")
         return None
 
-# --- 시뮬레이션 엔진 (입출금 통합 로직 반영) ---
-def run_simulation(df, initial_seed, num_slots, pcr=0.7, start_limit_date=None, end_limit_date=None, pending_dep=0.0, manual_withdrawn=0.0):
+# --- 시뮬레이션 엔진 (입금/인출 통합 로직 유지) ---
+def run_simulation(df, initial_seed, num_slots, pcr=0.7, start_limit_date=None, end_limit_date=None, pending_dep=0.0):
     if df is None or df.empty: return pd.DataFrame(), [], []
     
-    sim_df = df.dropna(subset=['rsi']).copy()
+    # rsi_sim 데이터가 있는 시점부터 시뮬레이션
+    sim_df = df.dropna(subset=['rsi_sim']).copy()
     
     if start_limit_date:
         sim_df = sim_df[sim_df.index.date >= start_limit_date]
@@ -64,21 +66,19 @@ def run_simulation(df, initial_seed, num_slots, pcr=0.7, start_limit_date=None, 
 
     if sim_df.empty: return pd.DataFrame(), [], []
 
-    # 초기 현금 (기존 수기 인출값 유지 - 호환성용)
-    cash = float(initial_seed) - manual_withdrawn
+    cash = float(initial_seed)
     shares, used_slots, slot_cash, avg_price = 0.0, 0, 0.0, 0.0
     ivy_reserve, cumulative_withdrawn = 0.0, 0.0 
     boxx_rate = (1 + 0.053) ** (1/252) - 1 
     
     internal_pending = float(pending_dep)
-    
     history, slot_details, trade_profits = [], [], []
     qqq_start_p = float(sim_df['qqq_close'].iloc[0])
     
     for date_idx, row in sim_df.iterrows():
         if ivy_reserve > 0: ivy_reserve *= (1 + boxx_rate)
             
-        p1, p2, curr_c, rsi_v = row['p1_c'], row['p2_c'], row['close'], row['rsi']
+        p1, p2, curr_c, rsi_v = row['p1_raw'], row['p2_raw'], row['close'], row['rsi_sim']
         x = np.ceil(((p1 + p2) * 1.01 / 1.99) * 100) / 100
         
         if rsi_v > 65: mode, b_l, s_l = "Ivy", x - 0.01, np.ceil((x * 1.03) * 100) / 100
@@ -103,7 +103,7 @@ def run_simulation(df, initial_seed, num_slots, pcr=0.7, start_limit_date=None, 
             shares, used_slots, slot_cash, avg_price, slot_details = 0.0, 0, 0.0, 0.0, []
             sold = True
         
-        # [수정] 차기 사이클 시작 시 보류된 입금/인출액 자동 투입 (음수 지원을 위해 != 0 적용)
+        # 차기 사이클 시작 시 추가 입금/인출액 반영
         if used_slots == 0 and internal_pending != 0:
             cash += internal_pending
             internal_pending = 0.0
@@ -136,7 +136,7 @@ def run_simulation(df, initial_seed, num_slots, pcr=0.7, start_limit_date=None, 
 with st.sidebar:
     st.header("⚙️ 운용 설정")
     target_ticker = st.selectbox("종목 선택", ["SOXL", "USD"], index=0)
-    config_key = f"v5_pro_final_{target_ticker}"
+    config_key = f"v5_final_pro_{target_ticker}"
     q_params = st.query_params
     saved_ls = localS.getItem(config_key) or {}
     
@@ -166,21 +166,19 @@ with tab1:
     if raw_df is not None:
         now_kst = datetime.now(KST).strftime('%Y-%m-%d %H:%M:%S')
         today_val = date.today()
-        # 시뮬레이션 실행 (기존 수기 인출 필드는 0.0으로 고정하여 통합 관리)
-        res_live, slots_live, _ = run_simulation(raw_df, init_seed, num_slots, pcr=pcr_val, start_limit_date=op_start, end_limit_date=today_val, pending_dep=p_dep, manual_withdrawn=0.0)
+        # 시뮬레이션 실행
+        res_live, slots_live, _ = run_simulation(raw_df, init_seed, num_slots, pcr=pcr_val, start_limit_date=op_start, end_limit_date=today_val, pending_dep=p_dep)
         
         if not res_live.empty:
             cur = res_live.iloc[-1]
             
-            # [핵심 수정] 실시간 가이드용 데이터 추출 로직
-            # yfinance는 마지막 마감 세션을 가져오므로, 마지막 행이 '전날' 데이터임
-            latest_data = raw_df.iloc[-1]
-            prev_data = raw_df.iloc[-2]
-            
-            p1_val, p1_date = latest_data['close'], raw_df.index[-1].strftime('%Y-%m-%d')
-            p2_val, p2_date = prev_data['close'], raw_df.index[-2].strftime('%Y-%m-%d')
-            rsi_val = latest_data['rsi_live'] # 전날 마감 기준 확정 RSI
-            
+            # [복구 및 교정] 사용자 snippet 기반 데이터 추출
+            latest_row = raw_df.iloc[-1]
+            p1_val = latest_row['p1_raw']     # 어제 마감 종가 (shift 0)
+            p2_val = latest_row['p2_raw']     # 그저께 마감 종가 (shift 1)
+            rsi_val = latest_row['rsi_live']  # 어제 마감 확정 RSI
+            p1_date = raw_df.index[-1].strftime('%Y-%m-%d')
+
             st.subheader(f"📊 {target_ticker} 현재 운용 현황")
             st.caption(f"🕒 최종 업데이트 (KST): {now_kst} | 기준 데이터: {p1_date} 종가 반영")
             
@@ -201,21 +199,19 @@ with tab1:
             x = np.ceil(((p1_val + p2_val) * 1.01 / 1.99) * 100) / 100
             mode, color = ("Ivy", "red") if rsi_val > 65 else ("Willow", "orange") if rsi_val > 45 else ("Lily", "blue") if rsi_val > 30 else ("Tulip", "purple")
             st.markdown(f"### 🎯 오늘의 실전 가이드 (현재 모드: :{color}[{mode}])")
-            st.write(f"🔍 **판단 근거:** 확정 RSI `{rsi_val:.2f}` | p1(어제) `${p1_val:.2f}` ({p1_date}) | p2(그저께) `${p2_val:.2f}` ({p2_date}) | 기준 x값 `${x:.2f}`")
+            st.write(f"🔍 **판단 근거:** 확정 RSI `{rsi_val:.2f}` | p1(전날) `${p1_val:.2f}` | p2(전전날) `${p2_val:.2f}` | 기준 x값 `${x:.2f}`")
             
             g1, g2 = st.columns(2)
             with g1:
                 b_p = x - 0.01 if rsi_val > 45 else np.floor((x * 0.975)*100)/100
-                # [수정 사항] 매수 부분: 빨간색 (st.error) 적용
-                st.error(f"#### 📥 {int(cur['Slots'])+1}회차 매수 (LOC)")
+                st.success(f"#### 📥 {int(cur['Slots'])+1}회차 매수 (LOC)")
                 if cur['Slots'] < num_slots:
                     t_cash = cur['Cash'] / (num_slots - cur['Slots'])
                     st.write(f"**타점:** `${b_p:.2f}` 이하 | **정량:** `{int(t_cash // b_p)} 주`")
                 else: st.write("✅ 매수 완료")
             with g2:
                 s_p = np.ceil((x * 1.03)*100)/100 if rsi_val > 65 else x
-                # [수정 사항] 매도 부분: 파란색 (st.info) 적용
-                st.info("#### 📤 전량 매도 (LOC)")
+                st.error("#### 📤 전량 매도 (LOC)")
                 if cur['Shares'] > 0:
                     st.write(f"**타점:** `${s_p:.2f}` 이상 | **수량:** `{int(cur['Shares'])} 주`")
                 else: st.write("보유 없음")
@@ -231,7 +227,7 @@ with tab2:
     if st.button("🚀 백테스트 실행"):
         bt_raw = get_processed_data(target_ticker, bt_start.strftime('%Y-%m-%d'))
         if bt_raw is not None:
-            res_b, _, trades = run_simulation(bt_raw, bt_seed, num_slots, pcr=pcr_val, start_limit_date=bt_start, end_limit_date=bt_end + timedelta(days=1), pending_dep=0.0, manual_withdrawn=0.0)
+            res_b, _, trades = run_simulation(bt_raw, bt_seed, num_slots, pcr=pcr_val, start_limit_date=bt_start, end_limit_date=bt_end + timedelta(days=1), pending_dep=0.0)
             if not res_b.empty:
                 f_val, withdrawn = res_b['Total'].iloc[-1], res_b['Withdrawn'].iloc[-1]
                 cagr = ((f_val / bt_seed) ** (365.25 / (res_b.index[-1] - res_b.index[0]).days) - 1) * 100
@@ -250,9 +246,8 @@ with tab2:
                 m2.metric("최종 자산", f"${f_val:,.0f}")
                 m2.markdown(f"<p style='font-size: 0.85rem; color: gray; margin-top: -15px;'>({int(f_val * today_fx):,}원)</p>", unsafe_allow_html=True)
                 m3.metric("CAGR (연복리)", f"{cagr:.2f}%")
-                m4, m5, m6 = st.columns(4)
-                m4.metric("MDD", f"{mdd:.2f}%"); m5.metric("Average DD", f"{avg_dd:.2f}%")
-                m6.metric("Calmar Ratio", f"{calmar:.2f}"); m7.metric("총 인출 현금", f"${withdrawn:,.0f}")
+                m4, m5, m6 = st.columns(3)
+                m4.metric("MDD", f"{mdd:.2f}%"); m5.metric("Calmar Ratio", f"{cagr/abs(mdd):.2f}"); m6.metric("총 인출 현금", f"${withdrawn:,.0f}")
                 st.line_chart(res_b[['Total', 'QQQ']])
                 res_b['year'] = res_b.index.year
                 y_stats = []
