@@ -310,13 +310,13 @@ with tab3:
     st.write("LOC(Limit On Close) 주문은 장 마감 가격이 내가 정한 가격보다 유리할 때만 체결되는 주문 방식입니다.")
     
     st.markdown("주문 종류를 **'LOC'**로 변경합니다.")
-    st.image("toss1.jpg", use_container_width=True)
+    st.image("toss1.jpg", width=350)
     
     st.markdown("가격에 가이드의 **'타점'** 금액을 입력합니다.")
-    st.image("toss2.jpg", use_container_width=True)
+    st.image("toss2.jpg", width=350)
     
     st.markdown("수량에 가이드의 **'정량'** 주수를 입력하고 '매수'를 누릅니다.")
-    st.image("toss3.jpg", use_container_width=True)
+    st.image("toss3.jpg", width=350)
 
     st.divider()
     
