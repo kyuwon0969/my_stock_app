@@ -306,17 +306,31 @@ with tab3:
 
     st.divider()
     
-    st.subheader("3. LOC 주문 방법 (토스증권 예시)")
+    st.subheader("3. LOC 주문 방법 (사진 넣는 법 가이드)")
     st.write("LOC(Limit On Close) 주문은 장 마감 가격이 내가 정한 가격보다 유리할 때만 체결되는 주문 방식입니다.")
     
-    st.markdown("1. 주문 종류를 **'LOC'**로 변경합니다.")
-    st.image("toss_1.jpg", use_container_width=True)
+    # [사진 넣는 방법 안내]
+    # 아래 코드는 사진을 넣는 예시입니다. 
+    # 사진 파일을 프로젝트 폴더에 넣고 'filename.png' 부분을 수정하거나, 웹 이미지 링크를 넣으시면 됩니다.
     
-    st.markdown("2. 가격에 가이드의 **'타점'** 금액을 입력합니다.")
-    st.image("toss_2.jpg", use_container_width=True)
+    st.code("""
+# 코드 예시: 
+st.image("사진파일명.png", caption="키움증권 LOC 주문 예시")
+# 또는 웹 링크 사용 시:
+st.image("https://example.com/image.jpg")
+    """, language="python")
     
-    st.markdown("3. 수량에 가이드의 **'정량'** 주수를 입력하고 '매수'를 누릅니다.")
-    st.image("toss_3.jpg", use_container_width=True)
+    # 임시 이미지 자리 (사용자가 사진을 준비하면 위 코드로 대체 가능)
+    st.warning("📸 여기에 주문 방법 스크린샷을 넣으려면, 코드의 `st.image` 부분에 사진 경로를 입력해 주세요.")
+    
+    st.markdown("""
+    **LOC 매수 주문 순서:**
+    1. 증권사 해외주식 주문 메뉴로 들어갑니다.
+    2. 종목(예: SOXL)을 선택합니다.
+    3. 주문 종류를 **'LOC'**로 변경합니다.
+    4. 가격에 가이드의 **'타점'** 금액을 입력합니다.
+    5. 수량에 가이드의 **'정량'** 주수를 입력하고 '매수'를 누릅니다.
+    """)
 
     st.divider()
     
