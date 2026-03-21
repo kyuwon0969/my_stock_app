@@ -144,7 +144,6 @@ with st.sidebar:
     
     st.divider()
     st.subheader("💰 수기 자금 관리")
-    # [수정 1] 입출금 통합 및 설명 변경
     p_dep = st.number_input("추가 입금/출금액 ($)", value=float(get_setting('pending_dep', 0.0)), 
                           help="전량 매도 후 현금 상태일 때 주문금액에 적용됩니다. 출금 금액은 음수로 쓰면 됩니다. Cycle 도중에(전액 현금 상태가 아닐 때) 출금하지 않는 것을 추천합니다.")
 
@@ -160,7 +159,7 @@ with st.sidebar:
         st.cache_data.clear()
         st.rerun()
 
-tab1, tab2 = st.tabs(["🎯 실시간 현황 & 가이드", "📊 과거 데이터 기반 백테스트"])
+tab1, tab2, tab3 = st.tabs(["🎯 실시간 현황 & 가이드", "📊 과거 데이터 기반 백테스트", "📖 Info (도움말)"])
 
 with tab1:
     raw_df = get_processed_data(target_ticker, op_start.strftime('%Y-%m-%d'))
@@ -190,7 +189,6 @@ with tab1:
             c3.metric("채워진 슬롯", f"{int(cur['Slots'])} / {num_slots}")
             c4.metric("현재 창출 가치", f"${cur['Total']:,.2f}")
             
-            # [수정 2] Ivy 비상금 설명 추가
             st.info(f"🏦 Ivy 비상금: **${cur['Ivy']:,.2f}** | 💸 PCR 인출액: **${cur['Withdrawn']:,.2f}**")
             st.caption("ℹ️ Ivy 모드에서 낸 총 수익금은 'Ivy 비상금'탭에 표시됩니다. Ivy 비상금으로는 BOXX를 매수하시면 됩니다. BOXX를 매수하지 않고 현금으로 남겨두는 것도 괜찮습니다. 이 돈은 Tulip 모드에서 전량 사용되니, 따로 인출해서 쓰면 안 됩니다.")
 
@@ -203,7 +201,6 @@ with tab1:
             x = np.ceil(((p1_val + p2_val) * 1.01 / 1.99) * 100) / 100
             mode, color = ("Ivy", "red") if rsi_val > 65 else ("Willow", "orange") if rsi_val > 45 else ("Lily", "blue") if rsi_val > 30 else ("Tulip", "purple")
             
-            # [수정 3] Tulip 첫 날 메시지 추가
             tulip_msg = " (만약 Ivy 비상금으로 BOXX를 매수한 상태라면, BOXX를 현재 가격으로 전량 매도하세요.)" if mode == "Tulip" and cur['Slots'] == 0 else ""
             
             st.markdown(f"### 🎯 오늘의 실전 가이드 (현재 모드: :{color}[{mode}]{tulip_msg})")
@@ -211,7 +208,6 @@ with tab1:
             
             g1, g2 = st.columns(2)
             with g1:
-                # [수정 4] 매수 위젯 빨간색으로 변경
                 b_p = x - 0.01 if rsi_val > 45 else np.floor((x * 0.975)*100)/100
                 st.error(f"#### 📥 {int(cur['Slots'])+1}회차 매수 (LOC)")
                 if cur['Slots'] < num_slots:
@@ -219,7 +215,6 @@ with tab1:
                     st.write(f"**타점:** `${b_p:.2f}` 이하 | **정량:** `{int(t_cash // b_p)} 주`")
                 else: st.write("✅ 매수 완료")
             with g2:
-                # [수정 4] 매도 위젯 파란색으로 변경 (st.info 활용)
                 s_p = np.ceil((x * 1.03)*100)/100 if rsi_val > 65 else x
                 st.info(f"#### 📤 전량 매도 (LOC)")
                 if cur['Shares'] > 0:
@@ -255,7 +250,6 @@ with tab2:
                 
                 m1, m2, m3 = st.columns(3)
                 m1.metric("초기 자산", f"${bt_seed:,.0f}")
-                # [수정 5] 원화 환산 글자 크기 1.5배 (html style 적용)
                 m1.markdown(f"<p style='font-size: 1.25rem; color: gray; margin-top: -15px;'>({int(bt_seed * today_fx):,}원)</p>", unsafe_allow_html=True)
                 m2.metric("최종 자산", f"${f_val:,.0f}")
                 m2.markdown(f"<p style='font-size: 1.25rem; color: gray; margin-top: -15px;'>({int(f_val * today_fx):,}원)</p>", unsafe_allow_html=True)
@@ -271,3 +265,79 @@ with tab2:
                     y_df = res_b[res_b['year'] == yr]
                     y_stats.append({"연도": yr, "수익률": f"{(y_df['Total'].iloc[-1]/y_df['Total'].iloc[0]-1)*100:.1f}%", "MDD": f"{(y_df['Total']/y_df['Total'].cummax()-1).min()*100:.1f}%", "연간 인출": f"${(y_df['Withdrawn'].iloc[-1] - y_df['Withdrawn'].iloc[0]):,.0f}"})
                 st.table(pd.DataFrame(y_stats))
+
+with tab3:
+    st.header("📖 사계절 전략 Pro 이용 가이드")
+    st.write("초보자분들을 위해 사이트의 각 기능과 주문 방법을 쉽게 설명해 드립니다.")
+    
+    st.divider()
+    
+    st.subheader("1. 주요 수치 및 위젯 설명")
+    col_info1, col_info2 = st.columns(2)
+    
+    with col_info1:
+        st.markdown("""
+        * **총 수익률**: 원금 대비 현재 자산이 얼마나 늘었는지(또는 줄었는지)를 백분율로 보여줍니다.
+        * **평균 단가**: 현재 보유 중인 주식들의 평균 매수 가격입니다.
+        * **채워진 슬롯**: 전체 투자금을 몇 번에 나누어 살 것인지 중, 현재 몇 번째까지 매수했는지를 보여줍니다.
+        * **현재 창출 가치**: 현금 + 주식 평가액 + 비상금 등을 모두 합친 나의 총 자산입니다.
+        """)
+        
+    with col_info2:
+        st.markdown("""
+        * **QQQ RSI, p1, p2, x값(판단 근거)**: 매수/매도 주문 타점을 구할 때 사용하는 요소들입니다.
+        * **Ivy 비상금**: 시장 상황이 좋을 때 챙겨두는 '보너스 수익금'입니다. 나중에 시장이 어려울 때 구원 투수로 사용됩니다.
+        * **PCR 인출액**: 수익이 날 때마다 원금에 합치지 않고 따로 현금화하여 챙겨둔 금액입니다.
+        """)
+
+    st.divider()
+    
+    st.subheader("2. 오늘의 실전 가이드 활용법")
+    st.info("매일 밤, 이 가이드를 보고 증권사 앱에서 **LOC 주문**을 예약하시면 됩니다.")
+    
+    st.markdown("""
+    * **📥 매수 가이드 (빨간색 위젯)**: 
+        - **타점**: 해당 금액 '이하'로 떨어지면 사겠다는 의미입니다.
+        - **정량**: 가이드에 적힌 주수만큼 주문을 넣으시면 됩니다.
+    * **📤 매도 가이드 (파란색 위젯)**: 
+        - **타점**: 해당 금액 '이상'으로 오르면 전량 팔겠다는 의미입니다.
+        - **수량**: 내가 가진 모든 주수를 입력하여 주문을 넣습니다.
+    """)
+
+    st.divider()
+    
+    st.subheader("3. LOC 주문 방법 (사진 넣는 법 가이드)")
+    st.write("LOC(Limit On Close) 주문은 장 마감 가격이 내가 정한 가격보다 유리할 때만 체결되는 주문 방식입니다.")
+    
+    # [사진 넣는 방법 안내]
+    # 아래 코드는 사진을 넣는 예시입니다. 
+    # 사진 파일을 프로젝트 폴더에 넣고 'filename.png' 부분을 수정하거나, 웹 이미지 링크를 넣으시면 됩니다.
+    
+    st.code("""
+# 코드 예시: 
+st.image("사진파일명.png", caption="키움증권 LOC 주문 예시")
+# 또는 웹 링크 사용 시:
+st.image("https://example.com/image.jpg")
+    """, language="python")
+    
+    # 임시 이미지 자리 (사용자가 사진을 준비하면 위 코드로 대체 가능)
+    st.warning("📸 여기에 주문 방법 스크린샷을 넣으려면, 코드의 `st.image` 부분에 사진 경로를 입력해 주세요.")
+    
+    st.markdown("""
+    **LOC 매수 주문 순서:**
+    1. 증권사 해외주식 주문 메뉴로 들어갑니다.
+    2. 종목(예: SOXL)을 선택합니다.
+    3. 주문 종류를 **'LOC'**로 변경합니다.
+    4. 가격에 가이드의 **'타점'** 금액을 입력합니다.
+    5. 수량에 가이드의 **'정량'** 주수를 입력하고 '매수'를 누릅니다.
+    """)
+
+    st.divider()
+    
+    st.subheader("4. 수기 자금 관리")
+    st.markdown("""
+    * **추가 입금/출금액**: 계좌에 돈을 더 넣거나 빼고 싶을 때 사용합니다. 
+    * **입금**: 양수(예: 1000)를 입력하세요.
+    * **출금**: 음수(예: -1000)를 입력하세요.
+    * **주의**: 주식을 하나라도 보유 중일 때는 계산이 꼬일 수 있으니, 모든 주식을 다 팔고 **'전액 현금'** 상태일 때만 적용하는 것을 강력 추천합니다.
+    """)
