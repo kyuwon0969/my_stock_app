@@ -190,7 +190,8 @@ with tab1:
             c4.metric("현재 창출 가치", f"${cur['Total']:,.2f}")
             
             st.info(f"🏦 Ivy 비상금: **${cur['Ivy']:,.2f}** | 💸 PCR 인출액: **${cur['Withdrawn']:,.2f}**")
-            st.caption("ℹ️ Ivy 모드에서 낸 총 수익금은 'Ivy 비상금'탭에 표시됩니다. Ivy 비상금으로는 BOXX를 매수하시면 됩니다. BOXX를 매수하지 않고 현금으로 남겨두는 것도 괜찮습니다. 이 돈은 Tulip 모드에서 전량 사용되니, 따로 인출해서 쓰면 안 됩니다.")
+            # [수정 부분] 요청하신 대로 문구 단축
+            st.caption("ℹ️ Ivy 모드에서 낸 총 수익금은 'Ivy 비상금'탭에 표시됩니다. Ivy 비상금은 현금으로 남겨두거나 BOXX를 매수합니다(선택사항). 이 돈은 Tulip 모드에서 전량 사용되니, 따로 인출해서 쓰면 안 됩니다.")
 
             if slots_live:
                 st.markdown("#### 📝 확정된 보유 슬롯 내역")
