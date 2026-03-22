@@ -127,7 +127,6 @@ def run_simulation(df, initial_seed, num_slots, pcr=0.7, start_limit_date=None, 
 # --- UI 레이아웃 및 저장 로직 ---
 with st.sidebar:
     st.header("⚙️ 운용 설정")
-    # 요청사항: 종목 선택 제거 및 SOXL 고정
     target_ticker = "SOXL"
     st.info(f"📍 종목: **{target_ticker} (고정)**")
     
@@ -433,8 +432,9 @@ with tab4:
         
         if st.button("💾 자산 기록 저장"):
             new_storage = {item["날짜"]: str(item["자산"]) for item in ledger_data}
-            localS.setItem(ledger_key, new_storage)
-            localS.setItem(ledger_meta_key, {"unit": unit_sym, "start_date": ledger_start.strftime('%Y-%m-%d')})
+            # [수정 구간] DuplicateElementKey 오류 방지를 위해 각각 고유한 컴포넌트 키(key) 부여
+            localS.setItem(ledger_key, new_storage, key="save_ledger_data")
+            localS.setItem(ledger_meta_key, {"unit": unit_sym, "start_date": ledger_start.strftime('%Y-%m-%d')}, key="save_ledger_meta")
             st.success("자산 기록이 성공적으로 저장되었습니다!")
             st.rerun()
             
