@@ -302,17 +302,20 @@ with tab4:
         current_fx = float(fx_data['Close'].iloc[-1])
     except: current_fx = 1350.0
 
-    ledger_key = "user_ledger_final_v4"
-    ledger_meta_key = "user_ledger_meta_final_v4"
+    ledger_key = f"user_ledger_v{target_ticker}_fixed"
+    ledger_meta_key = f"user_ledger_meta_v{target_ticker}_fixed"
     
+    # [핵심 수리] 시작할 때 브라우저 창고(localStorage)에서 데이터와 메타 정보를 즉시 불러옵니다.
     saved_ledger = localS.getItem(ledger_key) or {}
     saved_meta = localS.getItem(ledger_meta_key) or {"unit": "$", "start_date": "2024-01-01"}
     
     col_set1, col_set2 = st.columns(2)
     with col_set1:
+        # 불러온 메타 정보(unit)를 바탕으로 라디오 버튼 초기값을 설정합니다.
         ledger_unit = st.radio("화면 표시 단위", ["달러 ($)", "원화 (₩)"], index=0 if saved_meta.get("unit") == "$" else 1, horizontal=True)
         unit_sym = "$" if "달러" in ledger_unit else "₩"
     with col_set2:
+        # 불러온 메타 정보(start_date)를 바탕으로 날짜 입력창 초기값을 설정합니다.
         ledger_start = st.date_input("기록 시작일", value=pd.to_datetime(saved_meta.get("start_date")).date())
     
     st.divider()
@@ -325,7 +328,9 @@ with tab4:
         st.subheader(f"📅 월별 자산 입력 ({unit_sym})")
         for d in date_range:
             d_str = d.strftime('%Y-%m-%d')
+            # 창고에서 불러온 값이 있으면 표시하고, 없으면 0.0을 표시합니다.
             default_val = float(saved_ledger.get(d_str, 0.0))
+            
             if unit_sym == "$":
                 sub_text = f"(약 {int(default_val * current_fx):,}원)"
                 val = st.number_input(f"{d.strftime('%Y년 %m월')} 자산 총액 {sub_text}", value=default_val, key=f"in_{d_str}", step=100.0, format="%.2f")
@@ -336,11 +341,10 @@ with tab4:
         
         if st.button("💾 자산 기록 및 시작일 저장"):
             new_storage = {item["날짜"]: str(item["자산"]) for item in ledger_data}
-            # [수정] 컴포넌트 키 충돌을 방지하기 위해 중복된 setItem 호출을 안전하게 변경
-            localS.setItem(ledger_key, new_storage, key="btn_save_ledger_data_v4")
-            # meta 정보 저장 시 다른 고유 키를 사용하여 DuplicateElementKey 오류 해결
-            localS.setItem(ledger_meta_key, {"unit": unit_sym, "start_date": ledger_start.strftime('%Y-%m-%d')}, key="btn_save_ledger_meta_v4")
-            st.success("자산 데이터와 시작일 설정이 모두 저장되었습니다!")
+            # [수리 완료] 저장할 때 유니크한 key를 사용하여 DuplicateElementKey 오류를 방지하고 확실하게 저장합니다.
+            localS.setItem(ledger_key, new_storage, key=f"save_ledger_{target_ticker}")
+            localS.setItem(ledger_meta_key, {"unit": unit_sym, "start_date": ledger_start.strftime('%Y-%m-%d')}, key=f"save_meta_{target_ticker}")
+            st.success("자산 데이터와 시작일 설정이 모두 저장되었습니다! 이제 새로고침해도 유지됩니다.")
             st.rerun()
             
         df_ledger = pd.DataFrame(ledger_data)
@@ -356,18 +360,13 @@ with tab4:
             with c_res1:
                 st.metric("시작 자산", f"{unit_sym}{base_val:,.2f}" if unit_sym=="$" else f"{unit_sym}{base_val:,.0f}")
                 conv = base_val * current_fx if unit_sym == "$" else base_val / current_fx
-                # 문법 오류(f-string 괄호 및 포맷팅) 완벽 수정
-                if unit_sym == "$": 
-                    st.markdown(f"<p style='{won_style}'>(₩{int(conv):,})</p>", unsafe_allow_html=True)
-                else: 
-                    st.markdown(f"<p style='{won_style}'>(${conv:,.2f})</p>", unsafe_allow_html=True)
+                if unit_sym == "$": st.markdown(f"<p style='{won_style}'>(₩{int(conv):,})</p>", unsafe_allow_html=True)
+                else: st.markdown(f"<p style='{won_style}'>(${conv:,.2f})</p>", unsafe_allow_html=True)
             with c_res2:
                 st.metric("현재 자산", f"{unit_sym}{current_val:,.2f}" if unit_sym=="$" else f"{unit_sym}{current_val:,.0f}")
                 conv = current_val * current_fx if unit_sym == "$" else current_val / current_fx
-                if unit_sym == "$": 
-                    st.markdown(f"<p style='{won_style}'>(₩{int(conv):,})</p>", unsafe_allow_html=True)
-                else: 
-                    st.markdown(f"<p style='{won_style}'>(${conv:,.2f})</p>", unsafe_allow_html=True)
+                if unit_sym == "$": st.markdown(f"<p style='{won_style}'>(₩{int(conv):,})</p>", unsafe_allow_html=True)
+                else: st.markdown(f"<p style='{won_style}'>(${conv:,.2f})</p>", unsafe_allow_html=True)
             
             c_res3.metric("누적 총수익률", f"{total_roi:+.2f}%")
             if len(valid_df) > 1: st.line_chart(valid_df.set_index("날짜")["자산"])
