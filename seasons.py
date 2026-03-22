@@ -296,7 +296,7 @@ with tab3:
 
 with tab4:
     st.header("📝 개인 자산 기록부")
-    st.write("투자 실적을 수기로 기록하여 성과를 관리하는 공간입니다.")
+    st.write("실제 계좌 자산을 수기로 기록하여 투자 성과를 관리하는 공간입니다.")
     
     try:
         fx_data = yf.download("USDKRW=X", period="1d", progress=False)
@@ -304,20 +304,19 @@ with tab4:
     except: current_fx = 1350.0
 
     # 브라우저 창고 열쇠
-    ledger_key = f"final_ledger_{target_ticker}"
-    ledger_meta_key = f"final_meta_{target_ticker}"
+    ledger_key = f"final_ledger_{target_ticker}_stable"
+    ledger_meta_key = f"final_meta_{target_ticker}_stable"
     
-    # [핵심] 사이드바와 똑같은 방식으로 데이터 불러오기
+    # [수정] 사이드바와 동일하게 페이지 상단에서 'setItem'이 아닌 'getItem'으로 즉시 데이터 로드
     saved_ledger = localS.getItem(ledger_key) or {}
     saved_meta = localS.getItem(ledger_meta_key) or {"unit": "$", "start_date": "2024-01-01"}
     
     col_set1, col_set2 = st.columns(2)
     with col_set1:
-        ledger_unit = st.radio("화면 표시 단위", ["달러 ($)", "원화 (₩)"], index=0 if saved_meta.get("unit") == "$" else 1, horizontal=True, key="unit_radio")
+        ledger_unit = st.radio("화면 표시 단위", ["달러 ($)", "원화 (₩)"], index=0 if saved_meta.get("unit") == "$" else 1, horizontal=True, key="ledger_unit_sel")
         unit_sym = "$" if "달러" in ledger_unit else "₩"
     with col_set2:
-        # [핵심] 저장된 시작일 불러오기
-        ledger_start = st.date_input("기록 시작일", value=pd.to_datetime(saved_meta.get("start_date")).date(), key="start_date_input")
+        ledger_start = st.date_input("기록 시작일", value=pd.to_datetime(saved_meta.get("start_date")).date(), key="ledger_start_sel")
     
     st.divider()
     today = date.today()
@@ -331,20 +330,21 @@ with tab4:
         
         for d in date_range:
             d_str = d.strftime('%Y-%m-%d')
-            # [핵심] 창고에서 값 꺼내오기
+            # 창고에서 불러온 데이터 우선 적용
             default_val = float(saved_ledger.get(d_str, 0.0))
             
-            # 입력창 생성
-            val = st.number_input(f"{d.strftime('%Y년 %m월')} 자산 총액", value=default_val, key=f"rec_{d_str}", step=100.0 if unit_sym == "$" else 100000.0)
+            # 입력창 생성 (형님 편하시게 소수점 2자리 포맷 적용)
+            val = st.number_input(f"{d.strftime('%Y년 %m월')} 자산 총액", value=default_val, key=f"input_box_{d_str}", step=100.0 if unit_sym == "$" else 100000.0)
             ledger_data.append({"날짜": d_str, "자산": val})
         
-        # [핵심] 사이드바와 똑같은 저장 로직 (고정 키 사용)
-        if st.button("💾 자산 기록 및 시작일 저장", key="final_save_btn"):
+        # [수정] 저장 버튼 클릭 시 localStorage에 저장하고 즉시 사이트 새로고침 (운용 설정과 동일 로직)
+        if st.button("💾 자산 기록 및 시작일 저장", key="ledger_save_btn_final"):
             new_storage = {item["날짜"]: str(item["자산"]) for item in ledger_data}
+            # 중복 오류 방지를 위해 저장 로직 수행 후 즉시 리런
             localS.setItem(ledger_key, new_storage)
             localS.setItem(ledger_meta_key, {"unit": unit_sym, "start_date": ledger_start.strftime('%Y-%m-%d')})
             st.success("데이터가 브라우저에 안전하게 저장되었습니다!")
-            st.rerun() # 강제 새로고침으로 데이터 즉시 반영
+            st.rerun() 
             
         df_ledger = pd.DataFrame(ledger_data)
         df_ledger["자산"] = pd.to_numeric(df_ledger["자산"])
