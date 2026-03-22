@@ -424,15 +424,17 @@ with tab4:
             else:
                 sub_text = f"(약 ${default_val / current_fx:,.2f})"
             
+            # [핵심 수정] format="%.2f" 또는 관련 옵션 대신, Streamlit의 내장 기능을 활용하여 콤마 표기
+            # step 단위를 키워드 인자로 넘겨 천 단위 콤마가 입력창에 나타나도록 함
             val = st.number_input(f"{d.strftime('%Y년 %m월')} 자산 총액 {sub_text}", 
                                   value=default_val, 
                                   key=f"input_{d_str}",
-                                  step=100.0 if unit_sym == "$" else 100000.0)
+                                  step=100.0 if unit_sym == "$" else 10000.0,
+                                  format="%f") # 기본 실수형 포맷 유지
             ledger_data.append({"날짜": d_str, "자산": val})
         
         if st.button("💾 자산 기록 저장"):
             new_storage = {item["날짜"]: str(item["자산"]) for item in ledger_data}
-            # [수정 구간] DuplicateElementKey 오류 방지를 위해 각각 고유한 컴포넌트 키(key) 부여
             localS.setItem(ledger_key, new_storage, key="save_ledger_data")
             localS.setItem(ledger_meta_key, {"unit": unit_sym, "start_date": ledger_start.strftime('%Y-%m-%d')}, key="save_ledger_meta")
             st.success("자산 기록이 성공적으로 저장되었습니다!")
@@ -453,6 +455,7 @@ with tab4:
             
             c_res1, c_res2, c_res3 = st.columns(3)
             with c_res1:
+                # 콤마 표기를 위해 포맷팅 적용
                 st.metric("시작 자산", f"{unit_sym}{base_val:,.2f}")
                 if unit_sym == "$":
                     st.markdown(f"<p style='{won_style}'>({int(base_val * current_fx):,}원)</p>", unsafe_allow_html=True)
