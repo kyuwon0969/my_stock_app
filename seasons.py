@@ -296,15 +296,16 @@ with tab3:
 
 with tab4:
     st.header("📝 개인 자산 기록부")
-    st.write("투자 실적을 수기로 기록하여 성과를 관리하는 공간입니다.")
+    st.write("실제 계좌 자산을 수기로 기록하여 투자 성과를 관리하는 공간입니다.")
+    
     try:
         fx_data = yf.download("USDKRW=X", period="1d", progress=False)
         current_fx = float(fx_data['Close'].iloc[-1])
     except: current_fx = 1350.0
 
     # 브라우저 창고 열쇠 (키 값 고정)
-    ledger_key = f"final_ledger_{target_ticker}_stable"
-    ledger_meta_key = f"final_meta_{target_ticker}_stable"
+    ledger_key = f"user_ledger_final_stable_{target_ticker}"
+    ledger_meta_key = f"user_ledger_meta_final_stable_{target_ticker}"
     
     # [핵심 수리] 창고에서 즉시 읽어오기
     saved_ledger = localS.getItem(ledger_key) or {}
@@ -312,13 +313,11 @@ with tab4:
     
     col_set1, col_set2 = st.columns(2)
     with col_set1:
-        # 불러온 정보로 초기값 설정
         ledger_unit = st.radio("화면 표시 단위", ["달러 ($)", "원화 (₩)"], 
                                index=0 if saved_meta.get("unit") == "$" else 1, 
                                horizontal=True, key="ledger_unit_radio")
         unit_sym = "$" if "달러" in ledger_unit else "₩"
     with col_set2:
-        # 불러온 정보로 시작일 초기화
         ledger_start = st.date_input("기록 시작일", 
                                      value=pd.to_datetime(saved_meta.get("start_date")).date(),
                                      key="ledger_start_input")
@@ -335,28 +334,29 @@ with tab4:
         
         for d in date_range:
             d_str = d.strftime('%Y-%m-%d')
-            # 창고에서 해당 월 데이터가 있으면 불러오기
+            # 창고에 있는 값 불러오기
             default_val = float(saved_ledger.get(d_str, 0.0))
             
             if unit_sym == "$":
                 sub_text = f"(약 {int(default_val * current_fx):,}원)"
-                # [수정] 입력창 실시간 콤마 표기를 위해 format 적용
+                # [수정] format="%,.2f"를 통해 실시간 콤마 표기 적용
                 val = st.number_input(f"{d.strftime('%Y년 %m월')} 자산 총액 {sub_text}", 
-                                      value=default_val, key=f"in_{d_str}", step=100.0, format="%.2f")
+                                      value=default_val, key=f"in_{d_str}", step=100.0, format="%,.2f")
             else:
                 sub_text = f"(약 ${default_val / current_fx:,.2f})"
-                # [수정] 원화 콤마 표기 (정수형)
+                # [수정] 원화는 정수형 콤마 표기 (format="%,d")
                 val = st.number_input(f"{d.strftime('%Y년 %m월')} 자산 총액 {sub_text}", 
-                                      value=float(default_val), key=f"in_{d_str}", step=100000.0, format="%.0f")
+                                      value=int(default_val), key=f"in_{d_str}", step=100000, format="%,d")
             ledger_data.append({"날짜": d_str, "자산": val})
         
-        # [수정] 저장 시 Duplicate Key 오류 방지를 위해 각각 유니크한 key 부여
+        # [수정 완료] Duplicate Key 오류 방지를 위해 각각의 setItem에 유니크한 key 파라미터 부여
         if st.button("💾 자산 기록 및 시작일 저장", key="ledger_save_action_btn"):
             new_storage = {item["날짜"]: str(item["자산"]) for item in ledger_data}
-            localS.setItem(ledger_key, new_storage, key="save_ledger_data_unique")
-            localS.setItem(ledger_meta_key, {"unit": unit_sym, "start_date": ledger_start.strftime('%Y-%m-%d')}, key="save_ledger_meta_unique")
-            st.success("데이터가 브라우저에 안전하게 저장되었습니다!")
-            st.rerun() # 새로고침하여 즉시 반영
+            # key 파라미터를 명시하여 Streamlit Duplicate Element 오류 완벽 해결
+            localS.setItem(ledger_key, new_storage, key="set_ledger_data_stable")
+            localS.setItem(ledger_meta_key, {"unit": unit_sym, "start_date": ledger_start.strftime('%Y-%m-%d')}, key="set_ledger_meta_stable")
+            st.success("데이터가 브라우저에 안전하게 저장되었습니다! 새로고침 시에도 유지됩니다.")
+            st.rerun() 
             
         df_ledger = pd.DataFrame(ledger_data)
         df_ledger["자산"] = pd.to_numeric(df_ledger["자산"])
@@ -370,12 +370,12 @@ with tab4:
             
             c_res1, c_res2, c_res3 = st.columns(3)
             with c_res1:
-                st.metric("시작 자산", f"{unit_sym}{base_val:,.2f}" if unit_sym=="$" else f"{unit_sym}{base_val:,.0f}")
+                st.metric("시작 자산", f"{unit_sym}{base_val:,.2f}" if unit_sym=="$" else f"{unit_sym}{int(base_val):,}")
                 conv = base_val * current_fx if unit_sym == "$" else base_val / current_fx
                 if unit_sym == "$": st.markdown(f"<p style='{won_style}'>(₩{int(conv):,})</p>", unsafe_allow_html=True)
                 else: st.markdown(f"<p style='{won_style}'>(${conv:,.2f})</p>", unsafe_allow_html=True)
             with c_res2:
-                st.metric("현재 자산", f"{unit_sym}{current_val:,.2f}" if unit_sym=="$" else f"{unit_sym}{current_val:,.0f}")
+                st.metric("현재 자산", f"{unit_sym}{current_val:,.2f}" if unit_sym=="$" else f"{unit_sym}{int(current_val):,}")
                 conv = current_val * current_fx if unit_sym == "$" else current_val / current_fx
                 if unit_sym == "$": st.markdown(f"<p style='{won_style}'>(₩{int(conv):,})</p>", unsafe_allow_html=True)
                 else: st.markdown(f"<p style='{won_style}'>(${conv:,.2f})</p>", unsafe_allow_html=True)
