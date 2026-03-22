@@ -190,7 +190,6 @@ with tab1:
             c4.metric("현재 창출 가치", f"${cur['Total']:,.2f}")
             
             st.info(f"🏦 Ivy 비상금: **${cur['Ivy']:,.2f}** | 💸 PCR 인출액: **${cur['Withdrawn']:,.2f}**")
-            # [수정 부분] 요청하신 대로 문구 단축
             st.caption("ℹ️ Ivy 모드에서 낸 총 수익금은 'Ivy 비상금'탭에 표시됩니다. Ivy 비상금은 현금으로 남겨두거나 BOXX를 매수합니다(선택사항). 이 돈은 Tulip 모드에서 전량 사용되니, 따로 인출해서 쓰면 안 됩니다.")
 
             if slots_live:
@@ -260,12 +259,29 @@ with tab2:
                 m4.metric("MDD", f"{mdd:.2f}%"); m5.metric("Calmar", f"{cagr/abs(mdd):.2f}"); m6.metric("총 인출 현금", f"${withdrawn:,.0f}")
 
                 st.line_chart(res_b[['Total', 'QQQ']])
+                
+                # --- [계절별 분석 로직 적용] ---
+                res_b['month'] = res_b.index.month
+                def get_season(m):
+                    if m in [3, 4, 5]: return "봄 (3-5월)"
+                    elif m in [6, 7, 8]: return "여름 (6-8월)"
+                    elif m in [9, 10, 11]: return "가을 (9-11월)"
+                    else: return "겨울 (12-2월)"
+                
+                res_b['season'] = res_b['month'].apply(get_season)
                 res_b['year'] = res_b.index.year
-                y_stats = []
-                for yr in sorted(res_b['year'].unique()):
-                    y_df = res_b[res_b['year'] == yr]
-                    y_stats.append({"연도": yr, "수익률": f"{(y_df['Total'].iloc[-1]/y_df['Total'].iloc[0]-1)*100:.1f}%", "MDD": f"{(y_df['Total']/y_df['Total'].cummax()-1).min()*100:.1f}%", "연간 인출": f"${(y_df['Withdrawn'].iloc[-1] - y_df['Withdrawn'].iloc[0]):,.0f}"})
-                st.table(pd.DataFrame(y_stats))
+                
+                s_stats = []
+                for season_name in ["봄 (3-5월)", "여름 (6-8월)", "가을 (9-11월)", "겨울 (12-2월)"]:
+                    s_df = res_b[res_b['season'] == season_name]
+                    if not s_df.empty:
+                        # 계절별 평균 수익률 및 MDD 계산 (단순 기간 합산)
+                        s_perf = (s_df['Total'].pct_change().mean() * 63 * 100) # 분기 영업일 약 63일 가정
+                        s_mdd = (s_df['Total'] / s_df['Total'].cummax() - 1).min() * 100
+                        s_stats.append({"계절": season_name, "평균 분기 수익률": f"{s_perf:.1f}%", "최대 낙폭(MDD)": f"{s_mdd:.1f}%"})
+                
+                st.markdown("#### 🍂 계절별 전략 성과 (Seasonality)")
+                st.table(pd.DataFrame(s_stats))
 
 with tab3:
     st.header("📖 사계절 전략 Pro 이용 가이드")
