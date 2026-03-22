@@ -375,11 +375,16 @@ with tab4:
     st.header("📝 개인 자산 기록부")
     st.write("수수료, 세금, 수기 입출금 등으로 인해 발생하는 실제 자산과의 차이를 정확히 기록하고 관리하는 공간입니다.")
     
-    # 설정 키값 정의
+    # 환율 정보 가져오기 (원화/달러 자동 계산용)
+    try:
+        fx_data = yf.download("USDKRW=X", period="1d", progress=False)
+        current_fx = float(fx_data['Close'].iloc[-1])
+    except:
+        current_fx = 1350.0  # 실패 시 기본값
+    
     ledger_key = f"user_ledger_{target_ticker}"
     ledger_meta_key = f"user_ledger_meta_{target_ticker}"
     
-    # 데이터 로드
     saved_ledger = localS.getItem(ledger_key) or {}
     saved_meta = localS.getItem(ledger_meta_key) or {"unit": "$", "start_date": "2024-01-01"}
     
@@ -393,7 +398,6 @@ with tab4:
     
     st.divider()
     
-    # 날짜 범위 생성 (매달 1일)
     today = date.today()
     date_range = pd.date_range(start=ledger_start, end=today, freq='MS')
     
@@ -403,12 +407,18 @@ with tab4:
         ledger_data = []
         st.subheader(f"📅 월별 자산 입력 ({unit_sym})")
         
-        # 입력 그리드 생성
+        # 입력 그리드 및 자동 환산 표기
         for d in date_range:
             d_str = d.strftime('%Y-%m-%d')
             default_val = float(saved_ledger.get(d_str, 0.0))
             
-            val = st.number_input(f"{d.strftime('%Y년 %m월')} 자산 총액", 
+            # 보조 단위 계산
+            if unit_sym == "$":
+                sub_text = f"(약 {int(default_val * current_fx):,}원)"
+            else:
+                sub_text = f"(약 ${default_val / current_fx:,.2f})"
+            
+            val = st.number_input(f"{d.strftime('%Y년 %m월')} 자산 총액 {sub_text}", 
                                   value=default_val, 
                                   key=f"input_{d_str}",
                                   step=100.0 if unit_sym == "$" else 100000.0)
@@ -421,11 +431,8 @@ with tab4:
             st.success("자산 기록이 성공적으로 저장되었습니다!")
             st.rerun()
             
-        # 통계 계산
         df_ledger = pd.DataFrame(ledger_data)
         df_ledger["자산"] = pd.to_numeric(df_ledger["자산"])
-        
-        # 0이 아닌 첫 번째 기록부터 수익률 계산
         valid_df = df_ledger[df_ledger["자산"] > 0].copy()
         
         if len(valid_df) >= 1:
@@ -435,9 +442,24 @@ with tab4:
             current_val = valid_df["자산"].iloc[-1]
             total_roi = ((current_val / base_val) - 1) * 100 if base_val > 0 else 0
             
+            # 메인 결과에도 괄호 환산 표기 추가
+            won_style = "font-size: 1.25rem; color: gray; margin-top: -15px;"
+            
             c_res1, c_res2, c_res3 = st.columns(3)
-            c_res1.metric("시작 자산", f"{unit_sym}{base_val:,.2f}")
-            c_res2.metric("현재 자산", f"{unit_sym}{current_val:,.2f}")
+            with c_res1:
+                st.metric("시작 자산", f"{unit_sym}{base_val:,.2f}")
+                if unit_sym == "$":
+                    st.markdown(f"<p style='{won_style}'>({int(base_val * current_fx):,}원)</p>", unsafe_allow_html=True)
+                else:
+                    st.markdown(f"<p style='{won_style}'>(${base_val / current_fx:,.2f})</p>", unsafe_allow_html=True)
+            
+            with c_res2:
+                st.metric("현재 자산", f"{unit_sym}{current_val:,.2f}")
+                if unit_sym == "$":
+                    st.markdown(f"<p style='{won_style}'>({int(current_val * current_fx):,}원)</p>", unsafe_allow_html=True)
+                else:
+                    st.markdown(f"<p style='{won_style}'>(${current_val / current_fx:,.2f})</p>", unsafe_allow_html=True)
+            
             c_res3.metric("누적 총수익률", f"{total_roi:+.2f}%")
             
             if len(valid_df) > 1:
