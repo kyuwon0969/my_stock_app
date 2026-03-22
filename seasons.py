@@ -255,7 +255,7 @@ with tab3:
     st.divider()
     if info_category == "⚡ 사이트 사용법 3줄 요약":
         st.subheader("🚀 핵심 사용법 요약")
-        st.markdown("""1. **설정하기**: 왼쪽 사이드바 '운용 설정'에서 분할 수(4 또는 5 추천), 시작일, 원금, PCR(0.7에서 1 사이를 추천)을 설정하고 **'설정값 저장 및 강제 새로고침'** 버튼을 누른다.\n2. **확인하기**: '실시간 현황 & 가이드' 탭에서 **'오늘의 실전 가이드'**에 떠 있는 매수/매도 주문 가격과 수량을 확인한다.\n3. **주문하기**: 사용하는 증권 앱에서 그대로 달러 기준으로 **LOC 주문을 매일같이 건다**(휴장일 제외). (어렵다면 info 탭의 'LOC 주문 가이드' 카테고리 확인)""")
+        st.markdown("""1. **설정하기**: 왼쪽 사이드바 '운용 설정'에서 분할 수(4 또는 5 추천), 실제 운용 시작일, 투자 원금(달러 기준), PCR(0.7에서 1 사이를 추천)을 설정하고 **'설정값 저장 및 강제 새로고침'** 버튼을 누른다.\n2. **확인하기**: '실시간 현황 & 가이드' 탭에서 **'오늘의 실전 가이드'**에 떠 있는 매수/매도 주문 가격과 수량을 확인한다.\n3. **주문하기**: 사용하는 증권 앱에서 그대로 달러 기준으로 **LOC 주문을 매일같이 건다**(휴장일 제외). (어렵다면 info 탭의 'LOC 주문 가이드' 카테고리 확인)""")
     elif info_category == "🌿 Seasons 전략이란?":
         st.subheader("1. 퀀트 투자(Quantitative Trading)란?")
         st.write("주식을 전혀 몰라도 괜찮습니다! 퀀트 투자는 사람의 감정이나 짐작 대신, **철저하게 '데이터'와 '규칙'에 따라 기계적으로 매매**하는 방식입니다. '감'이 아니라 '계산'으로 투자하는 것이라 이해하시면 쉽습니다.")
@@ -302,8 +302,8 @@ with tab4:
         current_fx = float(fx_data['Close'].iloc[-1])
     except: current_fx = 1350.0
 
-    ledger_key = "user_ledger_final_v3"
-    ledger_meta_key = "user_ledger_meta_final_v3"
+    ledger_key = "user_ledger_final_v4"
+    ledger_meta_key = "user_ledger_meta_final_v4"
     
     saved_ledger = localS.getItem(ledger_key) or {}
     saved_meta = localS.getItem(ledger_meta_key) or {"unit": "$", "start_date": "2024-01-01"}
@@ -336,9 +336,10 @@ with tab4:
         
         if st.button("💾 자산 기록 및 시작일 저장"):
             new_storage = {item["날짜"]: str(item["자산"]) for item in ledger_data}
-            # 저장 키 충돌을 방지하기 위해 단일 고정 키로 명확하게 저장
-            localS.setItem(ledger_key, new_storage)
-            localS.setItem(ledger_meta_key, {"unit": unit_sym, "start_date": ledger_start.strftime('%Y-%m-%d')})
+            # [수정] 컴포넌트 키 충돌을 방지하기 위해 중복된 setItem 호출을 안전하게 변경
+            localS.setItem(ledger_key, new_storage, key="btn_save_ledger_data_v4")
+            # meta 정보 저장 시 다른 고유 키를 사용하여 DuplicateElementKey 오류 해결
+            localS.setItem(ledger_meta_key, {"unit": unit_sym, "start_date": ledger_start.strftime('%Y-%m-%d')}, key="btn_save_ledger_meta_v4")
             st.success("자산 데이터와 시작일 설정이 모두 저장되었습니다!")
             st.rerun()
             
@@ -352,20 +353,21 @@ with tab4:
             won_style = "font-size: 1.25rem; color: gray; margin-top: -15px;"
             c_res1, c_res2, c_res3 = st.columns(3)
             
-            # --- 오류 수정된 출력 부분 ---
             with c_res1:
                 st.metric("시작 자산", f"{unit_sym}{base_val:,.2f}" if unit_sym=="$" else f"{unit_sym}{base_val:,.0f}")
                 conv = base_val * current_fx if unit_sym == "$" else base_val / current_fx
-                # f-string 안의 콤마 포맷팅 문법 오류를 완벽하게 수정
-                if unit_sym == "$": st.markdown(f"<p style='{won_style}'>({int(conv):,}원)</p>", unsafe_allow_html=True)
-                else: st.markdown(f"<p style='{won_style}'>(${conv:,.2f})</p>", unsafe_allow_html=True)
+                # 문법 오류(f-string 괄호 및 포맷팅) 완벽 수정
+                if unit_sym == "$": 
+                    st.markdown(f"<p style='{won_style}'>(₩{int(conv):,})</p>", unsafe_allow_html=True)
+                else: 
+                    st.markdown(f"<p style='{won_style}'>(${conv:,.2f})</p>", unsafe_allow_html=True)
             with c_res2:
                 st.metric("현재 자산", f"{unit_sym}{current_val:,.2f}" if unit_sym=="$" else f"{unit_sym}{current_val:,.0f}")
                 conv = current_val * current_fx if unit_sym == "$" else current_val / current_fx
-                # f-string 안의 콤마 포맷팅 문법 오류를 완벽하게 수정
-                if unit_sym == "$": st.markdown(f"<p style='{won_style}'>({int(conv):,}원)</p>", unsafe_allow_html=True)
-                else: st.markdown(f"<p style='{won_style}'>(${conv:,.2f})</p>", unsafe_allow_html=True)
-            # ---------------------------
+                if unit_sym == "$": 
+                    st.markdown(f"<p style='{won_style}'>(₩{int(conv):,})</p>", unsafe_allow_html=True)
+                else: 
+                    st.markdown(f"<p style='{won_style}'>(${conv:,.2f})</p>", unsafe_allow_html=True)
             
             c_res3.metric("누적 총수익률", f"{total_roi:+.2f}%")
             if len(valid_df) > 1: st.line_chart(valid_df.set_index("날짜")["자산"])
