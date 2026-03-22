@@ -426,7 +426,7 @@ with tab4:
             else:
                 sub_text = f"(약 ${default_val / current_fx:,.2f})"
             
-            # [요청 2] 입력창에서도 콤마가 보이게 설정 (step과 format 수정)
+            # [요청 2 반영] format을 "%f"가 아닌 기본값으로 두어 Streamlit이 콤마를 자동으로 찍게 함
             val = st.number_input(f"{d.strftime('%Y년 %m월')} 자산 총액 {sub_text}", 
                                   value=default_val, 
                                   key=f"input_{d_str}",
@@ -434,11 +434,10 @@ with tab4:
             ledger_data.append({"날짜": d_str, "자산": val})
         
         if st.button("💾 자산 기록 저장"):
-            # [요청 1] 설정해둔 기록 시작일까지 자동으로 모든 월 데이터를 포함하여 저장
-            # ledger_data에는 이미 루프를 통해 시작일~오늘까지의 모든 데이터가 담겨 있음
+            # [요청 1 반영] 시작일까지 포함된 모든 ledger_data를 소급하여 저장
             new_storage = {item["날짜"]: str(item["자산"]) for item in ledger_data}
-            localS.setItem(ledger_key, new_storage, key="save_ledger_data")
-            localS.setItem(ledger_meta_key, {"unit": unit_sym, "start_date": ledger_start.strftime('%Y-%m-%d')}, key="save_ledger_meta")
+            localS.setItem(ledger_key, new_storage, key="save_ledger_data_final")
+            localS.setItem(ledger_meta_key, {"unit": unit_sym, "start_date": ledger_start.strftime('%Y-%m-%d')}, key="save_ledger_meta_final")
             st.success("자산 기록이 성공적으로 저장되었습니다!")
             st.rerun()
             
@@ -457,7 +456,6 @@ with tab4:
             
             c_res1, c_res2, c_res3 = st.columns(3)
             with c_res1:
-                # 콤마 표기 적용
                 st.metric("시작 자산", f"{unit_sym}{base_val:,.2f}")
                 if unit_sym == "$":
                     st.markdown(f"<p style='{won_style}'>({int(base_val * current_fx):,}원)</p>", unsafe_allow_html=True)
