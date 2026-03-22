@@ -160,7 +160,7 @@ with st.sidebar:
         st.cache_data.clear()
         st.rerun()
 
-tab1, tab2, tab3, tab4 = st.tabs(["🎯 실시간 현황 & 가이드", "📊 과거 데이터 기반 백테스트", "📖 Info (도움말)", "📝 자산 기록"])
+tab1, tab2, tab3 = st.tabs(["🎯 실시간 현황 & 가이드", "📊 과거 데이터 기반 백테스트", "📖 Info (도움말)"])
 
 with tab1:
     raw_df = get_processed_data(target_ticker, op_start.strftime('%Y-%m-%d'))
@@ -293,93 +293,3 @@ with tab3:
     elif info_category == "💰 수기 자금 관리":
         st.subheader("입출금 및 자금 관리 주의사항")
         st.markdown("""* **추가 입금/출금액**: 계좌에 돈을 더 넣거나 빼고 싶을 때 사용합니다. \n* **입금**: 양수(예: 1000)를 입력하세요.\n* **출금**: 음수(예: -1000)를 입력하세요.\n* **주의**: 주식을 하나라도 보유 중일 때는 계산이 꼬일 수 있으니, 모든 주식을 다 팔고 **'전액 현금'** 상태일 때만 적용하는 것을 강력 추천합니다.""")
-
-with tab4:
-    st.header("📝 개인 자산 기록부")
-    st.write("실제 계좌 자산을 수기로 기록하여 투자 성과를 관리하는 공간입니다.")
-    
-    try:
-        fx_data = yf.download("USDKRW=X", period="1d", progress=False)
-        current_fx = float(fx_data['Close'].iloc[-1])
-    except: current_fx = 1350.0
-
-    # 브라우저 창고 열쇠 (키 값 고정)
-    ledger_key = f"user_ledger_final_stable_{target_ticker}"
-    ledger_meta_key = f"user_ledger_meta_final_stable_{target_ticker}"
-    
-    # [핵심 수리] 창고에서 즉시 읽어오기
-    saved_ledger = localS.getItem(ledger_key) or {}
-    saved_meta = localS.getItem(ledger_meta_key) or {"unit": "$", "start_date": "2024-01-01"}
-    
-    col_set1, col_set2 = st.columns(2)
-    with col_set1:
-        ledger_unit = st.radio("화면 표시 단위", ["달러 ($)", "원화 (₩)"], 
-                               index=0 if saved_meta.get("unit") == "$" else 1, 
-                               horizontal=True, key="ledger_unit_radio")
-        unit_sym = "$" if "달러" in ledger_unit else "₩"
-    with col_set2:
-        ledger_start = st.date_input("기록 시작일", 
-                                     value=pd.to_datetime(saved_meta.get("start_date")).date(),
-                                     key="ledger_start_input")
-    
-    st.divider()
-    today = date.today()
-    date_range = pd.date_range(start=ledger_start, end=today, freq='MS')
-    
-    if len(date_range) == 0: 
-        st.info("시작일을 과거 날짜로 설정해주세요.")
-    else:
-        ledger_data = []
-        st.subheader(f"📅 월별 자산 입력 ({unit_sym})")
-        
-        for d in date_range:
-            d_str = d.strftime('%Y-%m-%d')
-            # 창고에 있는 값 불러오기
-            default_val = float(saved_ledger.get(d_str, 0.0))
-            
-            if unit_sym == "$":
-                sub_text = f"(약 {int(default_val * current_fx):,}원)"
-                # [수정] format="%,.2f"를 통해 실시간 콤마 표기 적용
-                val = st.number_input(f"{d.strftime('%Y년 %m월')} 자산 총액 {sub_text}", 
-                                      value=default_val, key=f"in_{d_str}", step=100.0, format="%,.2f")
-            else:
-                sub_text = f"(약 ${default_val / current_fx:,.2f})"
-                # [수정] 원화는 정수형 콤마 표기 (format="%,d")
-                val = st.number_input(f"{d.strftime('%Y년 %m월')} 자산 총액 {sub_text}", 
-                                      value=int(default_val), key=f"in_{d_str}", step=100000, format="%,d")
-            ledger_data.append({"날짜": d_str, "자산": val})
-        
-        # [수정 완료] Duplicate Key 오류 방지를 위해 각각의 setItem에 유니크한 key 파라미터 부여
-        if st.button("💾 자산 기록 및 시작일 저장", key="ledger_save_action_btn"):
-            new_storage = {item["날짜"]: str(item["자산"]) for item in ledger_data}
-            # key 파라미터를 명시하여 Streamlit Duplicate Element 오류 완벽 해결
-            localS.setItem(ledger_key, new_storage, key="set_ledger_data_stable")
-            localS.setItem(ledger_meta_key, {"unit": unit_sym, "start_date": ledger_start.strftime('%Y-%m-%d')}, key="set_ledger_meta_stable")
-            st.success("데이터가 브라우저에 안전하게 저장되었습니다! 새로고침 시에도 유지됩니다.")
-            st.rerun() 
-            
-        df_ledger = pd.DataFrame(ledger_data)
-        df_ledger["자산"] = pd.to_numeric(df_ledger["자산"])
-        valid_df = df_ledger[df_ledger["자산"] > 0].copy()
-        
-        if len(valid_df) >= 1:
-            st.divider(); st.subheader("📈 누적 투자 성과")
-            base_val, current_val = valid_df["자산"].iloc[0], valid_df["자산"].iloc[-1]
-            total_roi = ((current_val / base_val) - 1) * 100 if base_val > 0 else 0
-            won_style = "font-size: 1.25rem; color: gray; margin-top: -15px;"
-            
-            c_res1, c_res2, c_res3 = st.columns(3)
-            with c_res1:
-                st.metric("시작 자산", f"{unit_sym}{base_val:,.2f}" if unit_sym=="$" else f"{unit_sym}{int(base_val):,}")
-                conv = base_val * current_fx if unit_sym == "$" else base_val / current_fx
-                if unit_sym == "$": st.markdown(f"<p style='{won_style}'>(₩{int(conv):,})</p>", unsafe_allow_html=True)
-                else: st.markdown(f"<p style='{won_style}'>(${conv:,.2f})</p>", unsafe_allow_html=True)
-            with c_res2:
-                st.metric("현재 자산", f"{unit_sym}{current_val:,.2f}" if unit_sym=="$" else f"{unit_sym}{int(current_val):,}")
-                conv = current_val * current_fx if unit_sym == "$" else current_val / current_fx
-                if unit_sym == "$": st.markdown(f"<p style='{won_style}'>(₩{int(conv):,})</p>", unsafe_allow_html=True)
-                else: st.markdown(f"<p style='{won_style}'>(${conv:,.2f})</p>", unsafe_allow_html=True)
-            c_res3.metric("누적 총수익률", f"{total_roi:+.2f}%")
-            
-            if len(valid_df) > 1:
-                st.line_chart(valid_df.set_index("날짜")["자산"])
