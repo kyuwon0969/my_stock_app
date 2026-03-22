@@ -270,12 +270,20 @@ with tab3:
     st.header("📖 사계절 전략 Pro 이용 가이드")
     
     info_category = st.radio("궁금한 항목을 선택하세요", 
-                             ["🌿 Seasons 전략이란?", "🎯 실시간 현황 및 가이드 설명", "📊 백테스트 용어 설명", "⚙️ 운용 설정 설명", "📥 LOC 주문 방법 (토스증권)", "💰 수기 자금 관리"],
+                             ["⚡ 사이트 사용법 3줄 요약", "🌿 Seasons 전략이란?", "🎯 실시간 현황 및 가이드 설명", "📊 백테스트 용어 설명", "⚙️ 운용 설정 설명", "📥 LOC 주문 방법 (토스증권)", "💰 수기 자금 관리"],
                              horizontal=True)
     
     st.divider()
 
-    if info_category == "🌿 Seasons 전략이란?":
+    if info_category == "⚡ 사이트 사용법 3줄 요약":
+        st.subheader("🚀 핵심 사용법 요약")
+        st.markdown("""
+        1. **설정하기**: 왼쪽 사이드바 '운용 설정'에서 분할 수(4 또는 5 추천), 시작일, 원금, PCR(0.7~1 추천)을 입력하고 **'설정값 저장 및 강제 새로고침'** 버튼을 누릅니다.
+        2. **확인하기**: '실시간 현황 & 가이드' 탭의 **'오늘의 실전 가이드'** 위젯에 떠 있는 매수/매도 주문 가격과 수량을 확인합니다.
+        3. **주문하기**: 이용하시는 증권사 앱에서 해당 가격과 수량을 **달러 기준 LOC 주문**으로 매일 예약합니다(휴장일 제외). 자세한 방법은 아래 'LOC 주문 방법' 카테고리를 참고하세요.
+        """)
+
+    elif info_category == "🌿 Seasons 전략이란?":
         st.subheader("1. 퀀트 투자(Quantitative Trading)란?")
         st.write("주식을 전혀 몰라도 괜찮습니다! 퀀트 투자는 사람의 감정이나 짐작 대신, **철저하게 '데이터'와 '규칙'에 따라 기계적으로 매매**하는 방식입니다. '감'이 아니라 '계산'으로 투자하는 것이라 이해하시면 쉽습니다.")
         
@@ -375,12 +383,11 @@ with tab4:
     st.header("📝 개인 자산 기록부")
     st.write("수수료, 세금, 수기 입출금 등으로 인해 발생하는 실제 자산과의 차이를 정확히 기록하고 관리하는 공간입니다.")
     
-    # 환율 정보 가져오기 (원화/달러 자동 계산용)
     try:
         fx_data = yf.download("USDKRW=X", period="1d", progress=False)
         current_fx = float(fx_data['Close'].iloc[-1])
     except:
-        current_fx = 1350.0  # 실패 시 기본값
+        current_fx = 1350.0
     
     ledger_key = f"user_ledger_{target_ticker}"
     ledger_meta_key = f"user_ledger_meta_{target_ticker}"
@@ -407,12 +414,10 @@ with tab4:
         ledger_data = []
         st.subheader(f"📅 월별 자산 입력 ({unit_sym})")
         
-        # 입력 그리드 및 자동 환산 표기
         for d in date_range:
             d_str = d.strftime('%Y-%m-%d')
             default_val = float(saved_ledger.get(d_str, 0.0))
             
-            # 보조 단위 계산
             if unit_sym == "$":
                 sub_text = f"(약 {int(default_val * current_fx):,}원)"
             else:
@@ -442,23 +447,22 @@ with tab4:
             current_val = valid_df["자산"].iloc[-1]
             total_roi = ((current_val / base_val) - 1) * 100 if base_val > 0 else 0
             
-            # 메인 결과에도 괄호 환산 표기 추가
             won_style = "font-size: 1.25rem; color: gray; margin-top: -15px;"
             
             c_res1, c_res2, c_res3 = st.columns(3)
             with c_res1:
                 st.metric("시작 자산", f"{unit_sym}{base_val:,.2f}")
                 if unit_sym == "$":
-                    st.markdown(f"<p style='{won_style}'>({int(base_val * current_fx):,}원)</p>", unsafe_allow_html=True)
+                    st.markdown(f<p style='{won_style}'>({int(base_val * current_fx):,}원)</p>", unsafe_allow_html=True)
                 else:
-                    st.markdown(f"<p style='{won_style}'>(${base_val / current_fx:,.2f})</p>", unsafe_allow_html=True)
+                    st.markdown(f<p style='{won_style}'>(${base_val / current_fx:,.2f})</p>", unsafe_allow_html=True)
             
             with c_res2:
                 st.metric("현재 자산", f"{unit_sym}{current_val:,.2f}")
                 if unit_sym == "$":
-                    st.markdown(f"<p style='{won_style}'>({int(current_val * current_fx):,}원)</p>", unsafe_allow_html=True)
+                    st.markdown(f<p style='{won_style}'>({int(current_val * current_fx):,}원)</p>", unsafe_allow_html=True)
                 else:
-                    st.markdown(f"<p style='{won_style}'>(${current_val / current_fx:,.2f})</p>", unsafe_allow_html=True)
+                    st.markdown(f<p style='{won_style}'>(${current_val / current_fx:,.2f})</p>", unsafe_allow_html=True)
             
             c_res3.metric("누적 총수익률", f"{total_roi:+.2f}%")
             
