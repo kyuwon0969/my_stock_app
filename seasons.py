@@ -296,18 +296,17 @@ with tab3:
 
 with tab4:
     st.header("📝 개인 자산 기록부")
-    st.write("실제 계좌 자산을 수기로 기록하여 투자 성과를 관리하는 공간입니다.")
-    
+    st.write("투자 실적을 수기로 기록하여 성과를 관리하는 공간입니다.")
     try:
         fx_data = yf.download("USDKRW=X", period="1d", progress=False)
         current_fx = float(fx_data['Close'].iloc[-1])
     except: current_fx = 1350.0
 
     # 브라우저 창고 열쇠 (키 값 고정)
-    ledger_key = "user_ledger_v_final_stable"
-    ledger_meta_key = "user_ledger_meta_v_final_stable"
+    ledger_key = f"final_ledger_{target_ticker}_stable"
+    ledger_meta_key = f"final_meta_{target_ticker}_stable"
     
-    # [수정] 페이지 시작 시 창고(localStorage)에서 즉시 데이터 로드
+    # [핵심 수리] 창고에서 즉시 읽어오기
     saved_ledger = localS.getItem(ledger_key) or {}
     saved_meta = localS.getItem(ledger_meta_key) or {"unit": "$", "start_date": "2024-01-01"}
     
