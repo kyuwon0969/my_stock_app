@@ -127,9 +127,11 @@ def run_simulation(df, initial_seed, num_slots, pcr=0.7, start_limit_date=None, 
 # --- UI 레이아웃 및 저장 로직 ---
 with st.sidebar:
     st.header("⚙️ 운용 설정")
-    target_ticker = st.selectbox("종목 선택", ["SOXL", "USD"], index=0)
-    config_key = f"v5_pro_final_{target_ticker}"
+    # 요청사항: 종목 선택 제거 및 SOXL 고정
+    target_ticker = "SOXL"
+    st.info(f"📍 종목: **{target_ticker} (고정)**")
     
+    config_key = f"v5_pro_final_{target_ticker}"
     q_params = st.query_params
     saved_ls = localS.getItem(config_key) or {}
     
@@ -278,9 +280,9 @@ with tab3:
     if info_category == "⚡ 사이트 사용법 3줄 요약":
         st.subheader("🚀 핵심 사용법 요약")
         st.markdown("""
-        1. **설정하기**: 왼쪽 사이드바 '운용 설정'에서 분할 수(4 또는 5 추천), 시작일, 투자 원금(달러 기준), PCR(0.7~1 추천)을 입력하고 **'설정값 저장 및 강제 새로고침'** 버튼을 누릅니다.
-        2. **확인하기**: '실시간 현황 & 가이드' 탭의 **'오늘의 실전 가이드'** 위젯에 떠 있는 매수/매도 주문 가격과 수량을 확인합니다.
-        3. **주문하기**: 이용하시는 증권사 앱에서 해당 가격과 수량을 **달러 기준 LOC 주문**으로 매일 예약합니다(휴장일 제외). 자세한 방법은 아래 'LOC 주문 방법' 카테고리를 참고하세요.
+        1. **설정하기**: 왼쪽 사이드바 '운용 설정'에서 분할 수(4 또는 5 추천), 실제 운용 시작일, 투자 원금(달러 기준), PCR(0.7에서 1 사이를 추천)을 설정하고 **'설정값 저장 및 강제 새로고침'** 버튼을 누른다.
+        2. **확인하기**: '실시간 현황 & 가이드' 탭에서 **'오늘의 실전 가이드'**에 떠 있는 매수/매도 주문 가격과 수량을 확인한다.
+        3. **주문하기**: 사용하는 증권 앱에서 그대로 달러 기준으로 **LOC 주문을 매일같이 건다**(휴장일 제외). (어렵다면 info 탭의 'LOC 주문 가이드' 카테고리 확인)
         """)
 
     elif info_category == "🌿 Seasons 전략이란?":
