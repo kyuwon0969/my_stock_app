@@ -453,16 +453,16 @@ with tab4:
             with c_res1:
                 st.metric("시작 자산", f"{unit_sym}{base_val:,.2f}")
                 if unit_sym == "$":
-                    st.markdown(f<p style='{won_style}'>({int(base_val * current_fx):,}원)</p>", unsafe_allow_html=True)
+                    st.markdown(f"<p style='{won_style}'>({int(base_val * current_fx):,}원)</p>", unsafe_allow_html=True)
                 else:
-                    st.markdown(f<p style='{won_style}'>(${base_val / current_fx:,.2f})</p>", unsafe_allow_html=True)
+                    st.markdown(f"<p style='{won_style}'>(${base_val / current_fx:,.2f})</p>", unsafe_allow_html=True)
             
             with c_res2:
                 st.metric("현재 자산", f"{unit_sym}{current_val:,.2f}")
                 if unit_sym == "$":
-                    st.markdown(f<p style='{won_style}'>({int(current_val * current_fx):,}원)</p>", unsafe_allow_html=True)
+                    st.markdown(f"<p style='{won_style}'>({int(current_val * current_fx):,}원)</p>", unsafe_allow_html=True)
                 else:
-                    st.markdown(f<p style='{won_style}'>(${current_val / current_fx:,.2f})</p>", unsafe_allow_html=True)
+                    st.markdown(f"<p style='{won_style}'>(${current_val / current_fx:,.2f})</p>", unsafe_allow_html=True)
             
             c_res3.metric("누적 총수익률", f"{total_roi:+.2f}%")
             
