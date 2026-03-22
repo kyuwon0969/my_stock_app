@@ -159,7 +159,7 @@ with st.sidebar:
         st.cache_data.clear()
         st.rerun()
 
-tab1, tab2, tab3 = st.tabs(["🎯 실시간 현황 & 가이드", "📊 과거 데이터 기반 백테스트", "📖 Info (도움말)"])
+tab1, tab2, tab3, tab4 = st.tabs(["🎯 실시간 현황 & 가이드", "📊 과거 데이터 기반 백테스트", "📖 Info (도움말)", "📝 자산 기록"])
 
 with tab1:
     raw_df = get_processed_data(target_ticker, op_start.strftime('%Y-%m-%d'))
@@ -259,29 +259,12 @@ with tab2:
                 m4.metric("MDD", f"{mdd:.2f}%"); m5.metric("Calmar", f"{cagr/abs(mdd):.2f}"); m6.metric("총 인출 현금", f"${withdrawn:,.0f}")
 
                 st.line_chart(res_b[['Total', 'QQQ']])
-                
-                # --- [계절별 분석 로직 적용] ---
-                res_b['month'] = res_b.index.month
-                def get_season(m):
-                    if m in [3, 4, 5]: return "봄 (3-5월)"
-                    elif m in [6, 7, 8]: return "여름 (6-8월)"
-                    elif m in [9, 10, 11]: return "가을 (9-11월)"
-                    else: return "겨울 (12-2월)"
-                
-                res_b['season'] = res_b['month'].apply(get_season)
                 res_b['year'] = res_b.index.year
-                
-                s_stats = []
-                for season_name in ["봄 (3-5월)", "여름 (6-8월)", "가을 (9-11월)", "겨울 (12-2월)"]:
-                    s_df = res_b[res_b['season'] == season_name]
-                    if not s_df.empty:
-                        # 계절별 평균 수익률 및 MDD 계산 (단순 기간 합산)
-                        s_perf = (s_df['Total'].pct_change().mean() * 63 * 100) # 분기 영업일 약 63일 가정
-                        s_mdd = (s_df['Total'] / s_df['Total'].cummax() - 1).min() * 100
-                        s_stats.append({"계절": season_name, "평균 분기 수익률": f"{s_perf:.1f}%", "최대 낙폭(MDD)": f"{s_mdd:.1f}%"})
-                
-                st.markdown("#### 🍂 계절별 전략 성과 (Seasonality)")
-                st.table(pd.DataFrame(s_stats))
+                y_stats = []
+                for yr in sorted(res_b['year'].unique()):
+                    y_df = res_b[res_b['year'] == yr]
+                    y_stats.append({"연도": yr, "수익률": f"{(y_df['Total'].iloc[-1]/y_df['Total'].iloc[0]-1)*100:.1f}%", "MDD": f"{(y_df['Total']/y_df['Total'].cummax()-1).min()*100:.1f}%", "연간 인출": f"${(y_df['Withdrawn'].iloc[-1] - y_df['Withdrawn'].iloc[0]):,.0f}"})
+                st.table(pd.DataFrame(y_stats))
 
 with tab3:
     st.header("📖 사계절 전략 Pro 이용 가이드")
@@ -387,3 +370,75 @@ with tab3:
         * **출금**: 음수(예: -1000)를 입력하세요.
         * **주의**: 주식을 하나라도 보유 중일 때는 계산이 꼬일 수 있으니, 모든 주식을 다 팔고 **'전액 현금'** 상태일 때만 적용하는 것을 강력 추천합니다.
         """)
+
+with tab4:
+    st.header("📝 개인 자산 기록부")
+    st.write("수수료, 세금, 수기 입출금 등으로 인해 발생하는 실제 자산과의 차이를 정확히 기록하고 관리하는 공간입니다.")
+    
+    # 설정 키값 정의
+    ledger_key = f"user_ledger_{target_ticker}"
+    ledger_meta_key = f"user_ledger_meta_{target_ticker}"
+    
+    # 데이터 로드
+    saved_ledger = localS.getItem(ledger_key) or {}
+    saved_meta = localS.getItem(ledger_meta_key) or {"unit": "$", "start_date": "2024-01-01"}
+    
+    col_set1, col_set2 = st.columns(2)
+    with col_set1:
+        ledger_unit = st.radio("화면 표시 단위", ["달러 ($)", "원화 (₩)"], 
+                               index=0 if saved_meta.get("unit") == "$" else 1, horizontal=True)
+        unit_sym = "$" if "달러" in ledger_unit else "₩"
+    with col_set2:
+        ledger_start = st.date_input("기록 시작일", value=pd.to_datetime(saved_meta.get("start_date")).date())
+    
+    st.divider()
+    
+    # 날짜 범위 생성 (매달 1일)
+    today = date.today()
+    date_range = pd.date_range(start=ledger_start, end=today, freq='MS')
+    
+    if len(date_range) == 0:
+        st.info("시작일을 과거 날짜로 설정해주세요.")
+    else:
+        ledger_data = []
+        st.subheader(f"📅 월별 자산 입력 ({unit_sym})")
+        
+        # 입력 그리드 생성
+        for d in date_range:
+            d_str = d.strftime('%Y-%m-%d')
+            default_val = float(saved_ledger.get(d_str, 0.0))
+            
+            val = st.number_input(f"{d.strftime('%Y년 %m월')} 자산 총액", 
+                                  value=default_val, 
+                                  key=f"input_{d_str}",
+                                  step=100.0 if unit_sym == "$" else 100000.0)
+            ledger_data.append({"날짜": d_str, "자산": val})
+        
+        if st.button("💾 자산 기록 저장"):
+            new_storage = {item["날짜"]: str(item["자산"]) for item in ledger_data}
+            localS.setItem(ledger_key, new_storage)
+            localS.setItem(ledger_meta_key, {"unit": unit_sym, "start_date": ledger_start.strftime('%Y-%m-%d')})
+            st.success("자산 기록이 성공적으로 저장되었습니다!")
+            st.rerun()
+            
+        # 통계 계산
+        df_ledger = pd.DataFrame(ledger_data)
+        df_ledger["자산"] = pd.to_numeric(df_ledger["자산"])
+        
+        # 0이 아닌 첫 번째 기록부터 수익률 계산
+        valid_df = df_ledger[df_ledger["자산"] > 0].copy()
+        
+        if len(valid_df) >= 1:
+            st.divider()
+            st.subheader("📈 누적 투자 성과")
+            base_val = valid_df["자산"].iloc[0]
+            current_val = valid_df["자산"].iloc[-1]
+            total_roi = ((current_val / base_val) - 1) * 100 if base_val > 0 else 0
+            
+            c_res1, c_res2, c_res3 = st.columns(3)
+            c_res1.metric("시작 자산", f"{unit_sym}{base_val:,.2f}")
+            c_res2.metric("현재 자산", f"{unit_sym}{current_val:,.2f}")
+            c_res3.metric("누적 총수익률", f"{total_roi:+.2f}%")
+            
+            if len(valid_df) > 1:
+                st.line_chart(valid_df.set_index("날짜")["자산"])
