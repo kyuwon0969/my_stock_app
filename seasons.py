@@ -303,26 +303,32 @@ with tab4:
         current_fx = float(fx_data['Close'].iloc[-1])
     except: current_fx = 1350.0
 
-    # 브라우저 창고 열쇠
-    ledger_key = f"final_ledger_{target_ticker}_stable"
-    ledger_meta_key = f"final_meta_{target_ticker}_stable"
+    # 브라우저 창고 열쇠 (키 값 고정)
+    ledger_key = "user_ledger_v_final_stable"
+    ledger_meta_key = "user_ledger_meta_v_final_stable"
     
-    # [수정] 사이드바와 동일하게 페이지 상단에서 'setItem'이 아닌 'getItem'으로 즉시 데이터 로드
+    # [수정] 페이지 시작 시 창고(localStorage)에서 즉시 데이터 로드
     saved_ledger = localS.getItem(ledger_key) or {}
     saved_meta = localS.getItem(ledger_meta_key) or {"unit": "$", "start_date": "2024-01-01"}
     
     col_set1, col_set2 = st.columns(2)
     with col_set1:
-        ledger_unit = st.radio("화면 표시 단위", ["달러 ($)", "원화 (₩)"], index=0 if saved_meta.get("unit") == "$" else 1, horizontal=True, key="ledger_unit_sel")
+        # 불러온 정보로 초기값 설정
+        ledger_unit = st.radio("화면 표시 단위", ["달러 ($)", "원화 (₩)"], 
+                               index=0 if saved_meta.get("unit") == "$" else 1, 
+                               horizontal=True, key="ledger_unit_radio")
         unit_sym = "$" if "달러" in ledger_unit else "₩"
     with col_set2:
-        ledger_start = st.date_input("기록 시작일", value=pd.to_datetime(saved_meta.get("start_date")).date(), key="ledger_start_sel")
+        # 불러온 정보로 시작일 초기화
+        ledger_start = st.date_input("기록 시작일", 
+                                     value=pd.to_datetime(saved_meta.get("start_date")).date(),
+                                     key="ledger_start_input")
     
     st.divider()
     today = date.today()
     date_range = pd.date_range(start=ledger_start, end=today, freq='MS')
     
-    if len(date_range) == 0:
+    if len(date_range) == 0: 
         st.info("시작일을 과거 날짜로 설정해주세요.")
     else:
         ledger_data = []
@@ -330,21 +336,28 @@ with tab4:
         
         for d in date_range:
             d_str = d.strftime('%Y-%m-%d')
-            # 창고에서 불러온 데이터 우선 적용
+            # 창고에서 해당 월 데이터가 있으면 불러오기
             default_val = float(saved_ledger.get(d_str, 0.0))
             
-            # 입력창 생성 (형님 편하시게 소수점 2자리 포맷 적용)
-            val = st.number_input(f"{d.strftime('%Y년 %m월')} 자산 총액", value=default_val, key=f"input_box_{d_str}", step=100.0 if unit_sym == "$" else 100000.0)
+            if unit_sym == "$":
+                sub_text = f"(약 {int(default_val * current_fx):,}원)"
+                # [수정] 입력창 실시간 콤마 표기를 위해 format 적용
+                val = st.number_input(f"{d.strftime('%Y년 %m월')} 자산 총액 {sub_text}", 
+                                      value=default_val, key=f"in_{d_str}", step=100.0, format="%.2f")
+            else:
+                sub_text = f"(약 ${default_val / current_fx:,.2f})"
+                # [수정] 원화 콤마 표기 (정수형)
+                val = st.number_input(f"{d.strftime('%Y년 %m월')} 자산 총액 {sub_text}", 
+                                      value=float(default_val), key=f"in_{d_str}", step=100000.0, format="%.0f")
             ledger_data.append({"날짜": d_str, "자산": val})
         
-        # [수정] 저장 버튼 클릭 시 localStorage에 저장하고 즉시 사이트 새로고침 (운용 설정과 동일 로직)
-        if st.button("💾 자산 기록 및 시작일 저장", key="ledger_save_btn_final"):
+        # [수정] 저장 시 Duplicate Key 오류 방지를 위해 각각 유니크한 key 부여
+        if st.button("💾 자산 기록 및 시작일 저장", key="ledger_save_action_btn"):
             new_storage = {item["날짜"]: str(item["자산"]) for item in ledger_data}
-            # 중복 오류 방지를 위해 저장 로직 수행 후 즉시 리런
-            localS.setItem(ledger_key, new_storage)
-            localS.setItem(ledger_meta_key, {"unit": unit_sym, "start_date": ledger_start.strftime('%Y-%m-%d')})
+            localS.setItem(ledger_key, new_storage, key="save_ledger_data_unique")
+            localS.setItem(ledger_meta_key, {"unit": unit_sym, "start_date": ledger_start.strftime('%Y-%m-%d')}, key="save_ledger_meta_unique")
             st.success("데이터가 브라우저에 안전하게 저장되었습니다!")
-            st.rerun() 
+            st.rerun() # 새로고침하여 즉시 반영
             
         df_ledger = pd.DataFrame(ledger_data)
         df_ledger["자산"] = pd.to_numeric(df_ledger["자산"])
