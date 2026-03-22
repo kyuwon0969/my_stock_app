@@ -269,11 +269,9 @@ with tab2:
 
 with tab3:
     st.header("📖 사계절 전략 Pro 이용 가이드")
-    
     info_category = st.radio("궁금한 항목을 선택하세요", 
                              ["⚡ 사이트 사용법 3줄 요약", "🌿 Seasons 전략이란?", "🎯 실시간 현황 및 가이드 설명", "📊 백테스트 용어 설명", "⚙️ 운용 설정 설명", "📥 LOC 주문 방법 (토스증권)", "💰 수기 자금 관리"],
                              horizontal=True)
-    
     st.divider()
 
     if info_category == "⚡ 사이트 사용법 3줄 요약":
@@ -283,17 +281,14 @@ with tab3:
         2. **확인하기**: '실시간 현황 & 가이드' 탭에서 **'오늘의 실전 가이드'**에 떠 있는 매수/매도 주문 가격과 수량을 확인한다.
         3. **주문하기**: 사용하는 증권 앱에서 그대로 달러 기준으로 **LOC 주문을 매일같이 건다**(휴장일 제외). (어렵다면 info 탭의 'LOC 주문 가이드' 카테고리 확인)
         """)
-
     elif info_category == "🌿 Seasons 전략이란?":
         st.subheader("1. 퀀트 투자(Quantitative Trading)란?")
         st.write("주식을 전혀 몰라도 괜찮습니다! 퀀트 투자는 사람의 감정이나 짐작 대신, **철저하게 '데이터'와 '규칙'에 따라 기계적으로 매매**하는 방식입니다. '감'이 아니라 '계산'으로 투자하는 것이라 이해하시면 쉽습니다.")
-        
         st.subheader("2. Seasons 전략의 핵심")
         st.markdown("""
         * **자동 계산된 타점**: 이 사이트가 과거 데이터를 분석해 최적의 매수/매도 가격을 매일 알려줍니다.
         * **예약 주문(LOC)**: 낮에 업무를 보시거나 잠을 자는 동안에도 괜찮습니다. 매일 밤 장이 마감될 때 설정한 가격이 오면 자동으로 거래가 체결되는 **LOC 주문**을 활용합니다.
         """)
-        
         st.subheader("3. 4가지 운용 모드 설명")
         st.markdown("""
         시장 상황(QQQ RSI 지수)에 따라 전략은 4가지 모드로 자동 변신합니다.
@@ -304,7 +299,6 @@ with tab3:
         
         > **💡 비상금 운용 팁**: Ivy 모드에서 발생하는 수익은 Lily 모드 돌입 전까지 현금으로 안전하게 보관합니다. 만약 더 똑똑하게 운용하고 싶다면 **BOXX(미국 초단기채권주)**를 매수해 두었다가 Lily 모드가 시작될 때 팔아서 현금화하는 것도 좋은 방법입니다(선택 사항).
         """)
-
     elif info_category == "🎯 실시간 현황 및 가이드 설명":
         st.subheader("1. 주요 수치 및 위젯 설명")
         col_info1, col_info2 = st.columns(2)
@@ -321,7 +315,6 @@ with tab3:
             * **Ivy 비상금**: 시장 상황이 좋을 때 챙겨두는 '보너스 수익금'입니다. 나중에 시장이 어려울 때 구원 투수로 사용됩니다.
             * **PCR 인출액**: 수익이 날 때마다 원금에 합치지 않고 따로 현금화하여 챙겨둔 금액입니다.
             """)
-        
         st.divider()
         st.subheader("2. 오늘의 실전 가이드 활용법")
         st.info("매일 밤, 이 가이드를 보고 증권사 앱에서 **LOC 주문**을 예약하시면 됩니다.")
@@ -333,11 +326,9 @@ with tab3:
             - **타점**: 해당 금액 '이상'으로 오르면 전량 팔겠다는 의미입니다.
             - **수량**: 내가 가진 모든 주수를 입력하여 주문을 넣습니다.
         """)
-
     elif info_category == "📊 백테스트 용어 설명":
         st.subheader("과거 데이터 기반 백테스트란?")
         st.write("선택한 과거 기간 동안 이 전략을 그대로 실행했을 때 어떤 결과가 나왔을지 시뮬레이션하는 기능입니다.")
-        
         st.markdown("""
         * **CAGR (연복리 수익률)**: 매년 평균적으로 자산이 몇 %씩 성장했는지를 나타냅니다.
         * **MDD (최대 낙폭)**: 전고점 대비 자산이 가장 많이 떨어졌을 때 몇 %나 하락했는지를 나타냅니다. (낮을수록 안전합니다.)
@@ -346,7 +337,6 @@ with tab3:
             - **Total (파란선)**: 본 전략을 사용했을 때의 자산 변화입니다.
             - **QQQ (오렌지선)**: 미국 지수인 **나스닥 100**을 추종하는 ETF입니다. 전략의 성능을 시장 지수와 비교하기 위해 표시됩니다.
         """)
-
     elif info_category == "⚙️ 운용 설정 설명":
         st.subheader("전략 운용을 위한 핵심 설정")
         st.markdown("""
@@ -357,20 +347,15 @@ with tab3:
             - **특징**: PCR을 낮게 설정할수록(인출을 많이 할수록) CAGR(연평균 복리수익률)은 감소하는 대신 MDD(최대 낙폭)도 감소하는 경향이 있습니다.
             - **추천**: 자산 성장을 위해 **0.7 이상, 1에 가까운 값**을 추천합니다.
         """)
-
     elif info_category == "📥 LOC 주문 방법 (토스증권)":
         st.subheader("토스증권 LOC 주문 단계별 가이드")
         st.write("LOC(Limit On Close) 주문은 장 마감 가격이 내가 정한 가격보다 유리할 때만 체결되는 주문 방식입니다.")
-        
         st.markdown("주문 종류를 **'LOC'**로 변경합니다.")
         st.image("toss1.jpg", width=350)
-        
         st.markdown("가격에 가이드의 **'타점'** 금액을 입력합니다.")
         st.image("toss2.jpg", width=350)
-        
         st.markdown("수량에 가이드의 **'정량'** 주수를 입력하고 '매수'를 누릅니다.")
         st.image("toss3.jpg", width=350)
-
     elif info_category == "💰 수기 자금 관리":
         st.subheader("입출금 및 자금 관리 주의사항")
         st.markdown("""
@@ -390,9 +375,10 @@ with tab4:
     except:
         current_fx = 1350.0
     
-    ledger_key = f"user_ledger_{target_ticker}"
-    ledger_meta_key = f"user_ledger_meta_{target_ticker}"
+    ledger_key = f"user_ledger_{target_ticker}_v1"
+    ledger_meta_key = f"user_ledger_meta_{target_ticker}_v1"
     
+    # 데이터 로드
     saved_ledger = localS.getItem(ledger_key) or {}
     saved_meta = localS.getItem(ledger_meta_key) or {"unit": "$", "start_date": "2024-01-01"}
     
@@ -417,28 +403,27 @@ with tab4:
         
         for d in date_range:
             d_str = d.strftime('%Y-%m-%d')
-            # [수정] local storage에서 값을 읽어올 때 float 형변환 전 처리
             saved_val = saved_ledger.get(d_str, "0.0")
             default_val = float(saved_val)
             
             if unit_sym == "$":
                 sub_text = f"(약 {int(default_val * current_fx):,}원)"
+                # [수정] 달러는 소수점 2자리 + 콤마
+                val = st.number_input(f"{d.strftime('%Y년 %m월')} 자산 총액 {sub_text}", 
+                                      value=default_val, key=f"in_{d_str}", step=100.0, format="%.2f")
             else:
                 sub_text = f"(약 ${default_val / current_fx:,.2f})"
-            
-            # [요청 2 반영] format을 "%f"가 아닌 기본값으로 두어 Streamlit이 콤마를 자동으로 찍게 함
-            val = st.number_input(f"{d.strftime('%Y년 %m월')} 자산 총액 {sub_text}", 
-                                  value=default_val, 
-                                  key=f"input_{d_str}",
-                                  step=100.0 if unit_sym == "$" else 10000.0)
+                # [수정] 원화는 정수 + 콤마
+                val = st.number_input(f"{d.strftime('%Y년 %m월')} 자산 총액 {sub_text}", 
+                                      value=default_val, key=f"in_{d_str}", step=10000.0, format="%0.0f")
             ledger_data.append({"날짜": d_str, "자산": val})
         
-        if st.button("💾 자산 기록 저장"):
-            # [요청 1 반영] 시작일까지 포함된 모든 ledger_data를 소급하여 저장
+        if st.button("💾 자산 기록 저장 및 동기화"):
             new_storage = {item["날짜"]: str(item["자산"]) for item in ledger_data}
-            localS.setItem(ledger_key, new_storage, key="save_ledger_data_final")
-            localS.setItem(ledger_meta_key, {"unit": unit_sym, "start_date": ledger_start.strftime('%Y-%m-%d')}, key="save_ledger_meta_final")
-            st.success("자산 기록이 성공적으로 저장되었습니다!")
+            # 저장 키에 고유 ID를 부여하여 캐시 충돌 방지 및 시작일 동기화
+            localS.setItem(ledger_key, new_storage, key=f"save_data_{datetime.now().timestamp()}")
+            localS.setItem(ledger_meta_key, {"unit": unit_sym, "start_date": ledger_start.strftime('%Y-%m-%d')}, key=f"save_meta_{datetime.now().timestamp()}")
+            st.success("시작일을 포함한 모든 자산 기록이 저장되었습니다!")
             st.rerun()
             
         df_ledger = pd.DataFrame(ledger_data)
@@ -453,23 +438,15 @@ with tab4:
             total_roi = ((current_val / base_val) - 1) * 100 if base_val > 0 else 0
             
             won_style = "font-size: 1.25rem; color: gray; margin-top: -15px;"
-            
             c_res1, c_res2, c_res3 = st.columns(3)
             with c_res1:
-                st.metric("시작 자산", f"{unit_sym}{base_val:,.2f}")
-                if unit_sym == "$":
-                    st.markdown(f"<p style='{won_style}'>({int(base_val * current_fx):,}원)</p>", unsafe_allow_html=True)
-                else:
-                    st.markdown(f"<p style='{won_style}'>(${base_val / current_fx:,.2f})</p>", unsafe_allow_html=True)
-            
+                st.metric("시작 자산", f"{unit_sym}{base_val:,.2f}" if unit_sym=="$" else f"{unit_sym}{base_val:,.0f}")
+                conv_val = base_val * current_fx if unit_sym == "$" else base_val / current_fx
+                st.markdown(f"<p style='{won_style}'>({'₩' if unit_sym=='$' else '$'}{conv_val:,.0f if unit_sym=='$' else 2})</p>", unsafe_allow_html=True)
             with c_res2:
-                st.metric("현재 자산", f"{unit_sym}{current_val:,.2f}")
-                if unit_sym == "$":
-                    st.markdown(f"<p style='{won_style}'>({int(current_val * current_fx):,}원)</p>", unsafe_allow_html=True)
-                else:
-                    st.markdown(f"<p style='{won_style}'>(${current_val / current_fx:,.2f})</p>", unsafe_allow_html=True)
-            
+                st.metric("현재 자산", f"{unit_sym}{current_val:,.2f}" if unit_sym=="$" else f"{unit_sym}{current_val:,.0f}")
+                conv_val = current_val * current_fx if unit_sym == "$" else current_val / current_fx
+                st.markdown(f"<p style='{won_style}'>({'₩' if unit_sym=='$' else '$'}{conv_val:,.0f if unit_sym=='$' else 2})</p>", unsafe_allow_html=True)
             c_res3.metric("누적 총수익률", f"{total_roi:+.2f}%")
-            
             if len(valid_df) > 1:
                 st.line_chart(valid_df.set_index("날짜")["자산"])
