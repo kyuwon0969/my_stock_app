@@ -172,7 +172,6 @@ with tab1:
             valid_df = raw_df[raw_df.index.date < today_val]
             if valid_df.empty: valid_df = raw_df.iloc[:-1]
             
-            # [수리 구간] 어제/그저께 데이터가 없을 때를 대비한 체크
             if len(valid_df) >= 2:
                 latest_closed_row = valid_df.iloc[-1]
                 prev_closed_row = valid_df.iloc[-2]
@@ -183,39 +182,40 @@ with tab1:
                 
                 st.subheader(f"📊 {target_ticker} 현재 운용 현황")
                 st.caption(f"🕒 최종 업데이트 (KST): {now_kst} | 📅 가이드 계산 기준일: {data_date}")
-                
                 c1, c2, c3, c4 = st.columns(4)
                 c1.metric("총 수익률", f"{(cur['Total']/init_seed-1)*100:+.2f}%")
                 c2.metric("평균 단가", f"${cur['Avg']:.2f}")
                 c3.metric("채워진 슬롯", f"{int(cur['Slots'])} / {num_slots}")
                 c4.metric("현재 창출 가치", f"${cur['Total']:,.2f}")
-                
                 st.info(f"🏦 Ivy 비상금: **${cur['Ivy']:,.2f}** | 💸 PCR 인출액: **${cur['Withdrawn']:,.2f}**")
-                st.caption("ℹ️ Ivy 모드에서 낸 총 수익금은 'Ivy 비상금'탭에 표시됩니다. Ivy 비상금은 현금으로 남겨두거나 BOXX를 매수합니다(선택사항). 이 돈은 Tulip 모드에서 전량 사용되니, 따로 인출해서 쓰면 안 됩니다.")
                 
                 if slots_live:
                     st.markdown("#### 📝 확정된 보유 슬롯 내역")
                     st.table(pd.DataFrame(slots_live))
-                
                 st.divider()
+                
                 x = np.ceil(((p1_val + p2_val) * 1.01 / 1.99) * 100) / 100
                 mode, color = ("Ivy", "red") if rsi_val > 65 else ("Willow", "orange") if rsi_val > 45 else ("Lily", "blue") if rsi_val > 30 else ("Tulip", "purple")
                 tulip_msg = " (만약 Ivy 비상금으로 BOXX를 매수한 상태라면, BOXX를 현재 가격으로 전량 매도하세요.)" if mode == "Tulip" and cur['Slots'] == 0 else ""
-                
                 st.markdown(f"### 🎯 오늘의 실전 가이드 (현재 모드: :{color}[{mode}]{tulip_msg})")
                 st.write(f"🔍 **판단 근거:** QQQ RSI(전날) `{rsi_val:.2f}` | p1(전날) `${p1_val:.2f}` | p2(전전날) `${p2_val:.2f}` | 기준 x값 `${x:.2f}`")
                 
                 g1, g2 = st.columns(2)
                 with g1:
                     b_p = x - 0.01 if rsi_val > 45 else np.floor((x * 0.975)*100)/100
-                    st.error(f"#### 📥 {int(cur['Slots'])+1}회차 매수 (LOC)")
+                    st.error(f"#### {int(cur['Slots'])+1}회차 매수 (LOC)")
                     if cur['Slots'] < num_slots:
-                        # [핵심 수리] b_p가 0이거나 데이터가 꼬였을 때를 위한 무결성 체크
-                        if b_p > 0 and not np.isnan(b_p):
-                            t_cash = cur['Cash'] / (num_slots - cur['Slots'])
-                            st.write(f"**타점:** `${b_p:.2f}` 이하 | **정량:** `{int(t_cash // b_p)} 주`")
-                        else:
-                            st.write("⚠️ 실시간 데이터를 불러오는 중입니다. 잠시 후 새로고침해 주세요.")
+                        # [핵심 수리] 에러 방지 및 1만 불 고정 로직
+                        try:
+                            if b_p > 0 and not np.isnan(b_p):
+                                # 수익금을 제외한 '원금 + 추가입금액' 기준으로 정확히 슬롯 배분
+                                fixed_slot_cash = (init_seed + p_dep) / num_slots
+                                buy_qty = int(fixed_slot_cash // b_p)
+                                st.write(f"**타점:** `${b_p:.2f}` 이하 | **정량:** `{buy_qty} 주`")
+                            else:
+                                st.write("⚠️ 데이터 대기 중... (잠시 후 새로고침)")
+                        except:
+                            st.write("⚠️ 수량 계산 오류 (데이터 확인 필요)")
                     else: st.write("✅ 매수 완료")
                 with g2:
                     s_p = np.ceil((x * 1.03)*100)/100 if rsi_val > 65 else x
@@ -276,7 +276,7 @@ with tab3:
         st.subheader("1. 퀀트 투자(Quantitative Trading)란?")
         st.write("주식을 전혀 몰라도 괜찮습니다! 퀀트 투자는 사람의 감정이나 짐작 대신, **철저하게 '데이터'와 '규칙'에 따라 기계적으로 매매**하는 방식입니다. '감'이 아니라 '계산'으로 투자하는 것이라 이해하시면 쉽습니다.")
         st.subheader("2. Seasons 전략의 핵심")
-        st.markdown("""* **자동 계산된 타점**: 이 사이트가 과거 데이터를 분석해 최적의 매수/매도 가격을 매일 알려줍니다.\n* **예약 주문(LOC)**: 낮에 업무를 보시거나 잠을 자는 동안에도 괜찮습니다. 매일 밤 장이 마감될 때 설정한 가격이 오면 자동으로 거래가 체결되는 **LOC 주문**을 활용합니다.""")
+        st.markdown("""* **자동 계산된 타점**: 이 사이가 과거 데이터를 분석해 최적의 매수/매도 가격을 매일 알려줍니다.\n* **예약 주문(LOC)**: 낮에 업무를 보시거나 잠을 자는 동안에도 괜찮습니다. 매일 밤 장이 마감될 때 설정한 가격이 오면 자동으로 거래가 체결되는 **LOC 주문**을 활용합니다.""")
         st.subheader("3. 4가지 운용 모드 설명")
         st.markdown("""시장 상황(QQQ RSI 지수)에 따라 전략은 4가지 모드로 자동 변신합니다.\n* **Ivy(아이비)**: 시장이 매우 과열된 상태입니다. 보너스 수익금을 비상금으로 챙깁니다.\n* **Willow(윌로우)**: 시장이 안정적인 상태입니다. 일반적인 매매를 진행합니다.\n* **Lily(릴리)**: 시장이 조정을 받는 상태입니다. 조금 더 낮은 가격에 매수를 노립니다.\n* **Tulip(튤립)**: 시장이 공포에 빠진 상태입니다. 비상금을 투입해 기회를 잡습니다.\n\n> **💡 비상금 운용 팁**: Ivy 모드에서 발생하는 수익은 Lily 모드 돌입 전까지 현금으로 안전하게 보관합니다. 만약 더 똑똑하게 운용하고 싶다면 **BOXX(미국 초단기채권주)**를 매수해 두었다가 Lily 모드가 시작될 때 팔아서 현금화하는 것도 좋은 방법입니다(선택 사항).""")
     elif info_category == "🎯 실시간 현황 및 가이드 설명":
