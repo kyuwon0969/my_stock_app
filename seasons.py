@@ -171,45 +171,61 @@ with tab1:
         if not res_live.empty:
             valid_df = raw_df[raw_df.index.date < today_val]
             if valid_df.empty: valid_df = raw_df.iloc[:-1]
-            latest_closed_row = valid_df.iloc[-1]
-            prev_closed_row = valid_df.iloc[-2]
-            p1_val, p2_val = latest_closed_row['close'], prev_closed_row['close']
-            rsi_val = latest_closed_row['rsi_live']
-            data_date = valid_df.index[-1].strftime('%Y-%m-%d')
-            cur = res_live.iloc[-1]
-            st.subheader(f"📊 {target_ticker} 현재 운용 현황")
-            st.caption(f"🕒 최종 업데이트 (KST): {now_kst} | 📅 가이드 계산 기준일: {data_date}")
-            c1, c2, c3, c4 = st.columns(4)
-            c1.metric("총 수익률", f"{(cur['Total']/init_seed-1)*100:+.2f}%")
-            c2.metric("평균 단가", f"${cur['Avg']:.2f}")
-            c3.metric("채워진 슬롯", f"{int(cur['Slots'])} / {num_slots}")
-            c4.metric("현재 창출 가치", f"${cur['Total']:,.2f}")
-            st.info(f"🏦 Ivy 비상금: **${cur['Ivy']:,.2f}** | 💸 PCR 인출액: **${cur['Withdrawn']:,.2f}**")
-            st.caption("ℹ️ Ivy 모드에서 낸 총 수익금은 'Ivy 비상금'탭에 표시됩니다. Ivy 비상금은 현금으로 남겨두거나 BOXX를 매수합니다(선택사항). 이 돈은 Tulip 모드에서 전량 사용되니, 따로 인출해서 쓰면 안 됩니다.")
-            if slots_live:
-                st.markdown("#### 📝 확정된 보유 슬롯 내역")
-                st.table(pd.DataFrame(slots_live))
-            st.divider()
-            x = np.ceil(((p1_val + p2_val) * 1.01 / 1.99) * 100) / 100
-            mode, color = ("Ivy", "red") if rsi_val > 65 else ("Willow", "orange") if rsi_val > 45 else ("Lily", "blue") if rsi_val > 30 else ("Tulip", "purple")
-            tulip_msg = " (만약 Ivy 비상금으로 BOXX를 매수한 상태라면, BOXX를 현재 가격으로 전량 매도하세요.)" if mode == "Tulip" and cur['Slots'] == 0 else ""
-            st.markdown(f"### 🎯 오늘의 실전 가이드 (현재 모드: :{color}[{mode}]{tulip_msg})")
-            st.write(f"🔍 **판단 근거:** QQQ RSI(전날) `{rsi_val:.2f}` | p1(전날) `${p1_val:.2f}` | p2(전전날) `${p2_val:.2f}` | 기준 x값 `${x:.2f}`")
-            g1, g2 = st.columns(2)
-            with g1:
-                b_p = x - 0.01 if rsi_val > 45 else np.floor((x * 0.975)*100)/100
-                st.error(f"#### 📥 {int(cur['Slots'])+1}회차 매수 (LOC)")
-                if cur['Slots'] < num_slots:
-                    t_cash = cur['Cash'] / (num_slots - cur['Slots'])
-                    st.write(f"**타점:** `${b_p:.2f}` 이하 | **정량:** `{int(t_cash // b_p)} 주`")
-                else: st.write("✅ 매수 완료")
-            with g2:
-                s_p = np.ceil((x * 1.03)*100)/100 if rsi_val > 65 else x
-                st.info(f"#### 📤 전량 매도 (LOC)")
-                if cur['Shares'] > 0:
-                    st.write(f"**타점:** `${s_p:.2f}` 이상 | **수량:** `{int(cur['Shares'])} 주`")
-                else: st.write("보유 없음")
-            st.line_chart(res_live[['Total', 'QQQ']])
+            
+            # [수리 구간] 어제/그저께 데이터가 없을 때를 대비한 체크
+            if len(valid_df) >= 2:
+                latest_closed_row = valid_df.iloc[-1]
+                prev_closed_row = valid_df.iloc[-2]
+                p1_val, p2_val = latest_closed_row['close'], prev_closed_row['close']
+                rsi_val = latest_closed_row['rsi_live']
+                data_date = valid_df.index[-1].strftime('%Y-%m-%d')
+                cur = res_live.iloc[-1]
+                
+                st.subheader(f"📊 {target_ticker} 현재 운용 현황")
+                st.caption(f"🕒 최종 업데이트 (KST): {now_kst} | 📅 가이드 계산 기준일: {data_date}")
+                
+                c1, c2, c3, c4 = st.columns(4)
+                c1.metric("총 수익률", f"{(cur['Total']/init_seed-1)*100:+.2f}%")
+                c2.metric("평균 단가", f"${cur['Avg']:.2f}")
+                c3.metric("채워진 슬롯", f"{int(cur['Slots'])} / {num_slots}")
+                c4.metric("현재 창출 가치", f"${cur['Total']:,.2f}")
+                
+                st.info(f"🏦 Ivy 비상금: **${cur['Ivy']:,.2f}** | 💸 PCR 인출액: **${cur['Withdrawn']:,.2f}**")
+                st.caption("ℹ️ Ivy 모드에서 낸 총 수익금은 'Ivy 비상금'탭에 표시됩니다. Ivy 비상금은 현금으로 남겨두거나 BOXX를 매수합니다(선택사항). 이 돈은 Tulip 모드에서 전량 사용되니, 따로 인출해서 쓰면 안 됩니다.")
+                
+                if slots_live:
+                    st.markdown("#### 📝 확정된 보유 슬롯 내역")
+                    st.table(pd.DataFrame(slots_live))
+                
+                st.divider()
+                x = np.ceil(((p1_val + p2_val) * 1.01 / 1.99) * 100) / 100
+                mode, color = ("Ivy", "red") if rsi_val > 65 else ("Willow", "orange") if rsi_val > 45 else ("Lily", "blue") if rsi_val > 30 else ("Tulip", "purple")
+                tulip_msg = " (만약 Ivy 비상금으로 BOXX를 매수한 상태라면, BOXX를 현재 가격으로 전량 매도하세요.)" if mode == "Tulip" and cur['Slots'] == 0 else ""
+                
+                st.markdown(f"### 🎯 오늘의 실전 가이드 (현재 모드: :{color}[{mode}]{tulip_msg})")
+                st.write(f"🔍 **판단 근거:** QQQ RSI(전날) `{rsi_val:.2f}` | p1(전날) `${p1_val:.2f}` | p2(전전날) `${p2_val:.2f}` | 기준 x값 `${x:.2f}`")
+                
+                g1, g2 = st.columns(2)
+                with g1:
+                    b_p = x - 0.01 if rsi_val > 45 else np.floor((x * 0.975)*100)/100
+                    st.error(f"#### 📥 {int(cur['Slots'])+1}회차 매수 (LOC)")
+                    if cur['Slots'] < num_slots:
+                        # [핵심 수리] b_p가 0이거나 데이터가 꼬였을 때를 위한 무결성 체크
+                        if b_p > 0 and not np.isnan(b_p):
+                            t_cash = cur['Cash'] / (num_slots - cur['Slots'])
+                            st.write(f"**타점:** `${b_p:.2f}` 이하 | **정량:** `{int(t_cash // b_p)} 주`")
+                        else:
+                            st.write("⚠️ 실시간 데이터를 불러오는 중입니다. 잠시 후 새로고침해 주세요.")
+                    else: st.write("✅ 매수 완료")
+                with g2:
+                    s_p = np.ceil((x * 1.03)*100)/100 if rsi_val > 65 else x
+                    st.info(f"#### 📤 전량 매도 (LOC)")
+                    if cur['Shares'] > 0:
+                        st.write(f"**타점:** `${s_p:.2f}` 이상 | **수량:** `{int(cur['Shares'])} 주`")
+                    else: st.write("보유 없음")
+                st.line_chart(res_live[['Total', 'QQQ']])
+            else:
+                st.warning("⚠️ 야후 파이낸스에서 주가 정보를 가져오는 데 실패했습니다. 잠시 후 다시 시도해 주세요.")
 
 with tab2:
     st.header("🔍 과거 데이터 기반 백테스트")
