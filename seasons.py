@@ -202,35 +202,43 @@ with tab1:
                 
                 g1, g2 = st.columns(2)
                 with g1:
+                    # --- [수정된 매수 가이드 로직 시작] ---
                     b_p = x - 0.01 if rsi_val > 45 else np.floor((x * 0.975)*100)/100
                     st.error(f"#### {int(cur['Slots'])+1}회차 매수 (LOC)")
+                    
                     if cur['Slots'] < num_slots:
-                        # [핵심 수리] 동적 재투자 자산 기준 수량 계산 로직
                         try:
                             if b_p > 0 and not np.isnan(b_p):
-                                # 1. 현재 사이클의 총 가용 자산 계산 (현금 + 이미 매수된 원금)
-                                # cur['Cash']에는 이미 이전 사이클의 PCR 재투자 수익이 포함되어 있습니다.
-                                active_capital = cur['Cash'] + (cur['Avg'] * cur['Shares'])
+                                # 1. 마지막 '전량 매도(현금 100%)' 상태였던 시점의 현금 찾기
+                                # 이것이 이번 사이클의 불변하는 '기준 시드(원금+PCR수익)'가 됩니다.
+                                zero_slots_df = res_live[res_live['Slots'] == 0]
+                                if not zero_slots_df.empty:
+                                    base_capital = zero_slots_df.iloc[-1]['Cash']
+                                else:
+                                    base_capital = init_seed
+
+                                # 2. 이번 사이클 총 자금 = 기준 시드 + 수기 입출금액
+                                # 사이클 도중에 주가가 올라도 base_capital은 변하지 않으므로 자금 기준이 고정됩니다.
+                                active_capital = base_capital + p_dep
                                 
-                                # 2. 튤립 모드이면서 첫 매수 전이면 Ivy 비상금을 합산 (Tulip 진입 시 전량 투입 로직)
+                                # 3. 튤립 모드 보너스 (첫 매수 전일 때만 Ivy 비상금 합산)
                                 if mode == "Tulip" and cur['Slots'] == 0:
                                     active_capital += cur['Ivy']
                                 
-                                # 3. 아직 반영되지 않은 추가 입출금액(p_dep) 합산 (첫 매수 시점에만 유효)
-                                if cur['Slots'] == 0:
-                                    active_capital += p_dep
-                                
-                                # 4. 계산된 총 자산을 슬롯으로 나누어 정량 계산
+                                # 4. 고정된 자금을 바탕으로 슬롯당 투자금 및 수량 계산
                                 fixed_slot_cash = active_capital / num_slots
                                 buy_qty = int(fixed_slot_cash // b_p)
                                 
                                 st.write(f"**타점:** `${b_p:.2f}` 이하 | **정량:** `{buy_qty} 주`")
-                                st.caption(f"💡 현재 사이클 기준 자금: ${active_capital:,.2f} (슬롯당 ${fixed_slot_cash:,.2f})")
+                                st.caption(f"💡 사이클 고정 시드: ${active_capital:,.2f} (슬롯당 ${fixed_slot_cash:,.2f})")
                             else:
-                                st.write("⚠️ 데이터 대기 중... (잠시 후 새로고침)")
-                        except:
-                            st.write("⚠️ 수량 계산 오류 (데이터 확인 필요)")
-                    else: st.write("✅ 매수 완료")
+                                st.write("⚠️ 데이터 대기 중...")
+                        except Exception as e:
+                            st.write(f"⚠️ 수량 계산 오류: {e}")
+                    else:
+                        st.write("✅ 매수 완료")
+                    # --- [수정된 매수 가이드 로직 끝] ---
+
                 with g2:
                     s_p = np.ceil((x * 1.03)*100)/100 if rsi_val > 65 else x
                     st.info(f"#### 📤 전량 매도 (LOC)")
