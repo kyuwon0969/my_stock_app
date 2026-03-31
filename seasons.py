@@ -205,27 +205,27 @@ with tab1:
                     b_p = x - 0.01 if rsi_val > 45 else np.floor((x * 0.975)*100)/100
                     st.error(f"#### {int(cur['Slots'])+1}회차 매수 (LOC)")
                     if cur['Slots'] < num_slots:
-                        # [핵심 수리] 동적 자금 기준 수량 계산 로직
+                        # [핵심 수리] 동적 재투자 자산 기준 수량 계산 로직
                         try:
                             if b_p > 0 and not np.isnan(b_p):
-                                # 1. 최근 '전량 매도(슬롯 0)' 시점의 현금(원금+PCR) 찾기
-                                zero_slots_history = res_live[res_live['Slots'] == 0]
-                                if not zero_slots_history.empty:
-                                    base_capital = zero_slots_history.iloc[-1]['Cash']
-                                else:
-                                    base_capital = init_seed
+                                # 1. 현재 사이클의 총 가용 자산 계산 (현금 + 이미 매수된 원금)
+                                # cur['Cash']에는 이미 이전 사이클의 PCR 재투자 수익이 포함되어 있습니다.
+                                active_capital = cur['Cash'] + (cur['Avg'] * cur['Shares'])
                                 
-                                # 2. 튤립 모드 신규 진입 시에만 Ivy 비상금 합산
+                                # 2. 튤립 모드이면서 첫 매수 전이면 Ivy 비상금을 합산 (Tulip 진입 시 전량 투입 로직)
                                 if mode == "Tulip" and cur['Slots'] == 0:
-                                    base_capital += cur['Ivy']
+                                    active_capital += cur['Ivy']
                                 
-                                # 3. 추가 입출금 반영 및 슬롯당 금액 계산
-                                current_cycle_total = base_capital + p_dep
-                                fixed_slot_cash = current_cycle_total / num_slots
+                                # 3. 아직 반영되지 않은 추가 입출금액(p_dep) 합산 (첫 매수 시점에만 유효)
+                                if cur['Slots'] == 0:
+                                    active_capital += p_dep
                                 
+                                # 4. 계산된 총 자산을 슬롯으로 나누어 정량 계산
+                                fixed_slot_cash = active_capital / num_slots
                                 buy_qty = int(fixed_slot_cash // b_p)
+                                
                                 st.write(f"**타점:** `${b_p:.2f}` 이하 | **정량:** `{buy_qty} 주`")
-                                st.caption(f"💡 기준 자금: ${current_cycle_total:,.2f} (슬롯당 ${fixed_slot_cash:,.2f})")
+                                st.caption(f"💡 현재 사이클 기준 자금: ${active_capital:,.2f} (슬롯당 ${fixed_slot_cash:,.2f})")
                             else:
                                 st.write("⚠️ 데이터 대기 중... (잠시 후 새로고침)")
                         except:
@@ -241,7 +241,6 @@ with tab1:
             else:
                 st.warning("⚠️ 야후 파이낸스에서 주가 정보를 가져오는 데 실패했습니다. 잠시 후 다시 시도해 주세요.")
 
-# --- 백테스트 및 가이드 탭 (원본 유지) ---
 with tab2:
     st.header("🔍 과거 데이터 기반 백테스트")
     col_b1, col_b2, col_b3 = st.columns(3)
