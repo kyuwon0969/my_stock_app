@@ -103,19 +103,18 @@ def run_simulation(df, initial_seed, num_slots, pcr=0.7, start_limit_date=None, 
         if used_slots == 0 and mode == "Tulip" and ivy_reserve > 0:
             cash += ivy_reserve; ivy_reserve = 0.0
             
-        # [수정 로직] N+1번째 예비 슬롯까지 허용
+        # [N+1 예비 슬롯 엔진 로직]
         if not sold and used_slots < (num_slots + 1) and curr_c <= b_l:
-            # 기본 슬롯 배분
             if used_slots == 0: 
                 slot_cash = cash / num_slots
             
-            # 매수 자금 결정: N회차까지는 정량, N+1회차(예비)는 잔여 현금 전량
+            # 정규 슬롯은 slot_cash, 예비 슬롯(used_slots == num_slots)은 남은 cash 전량
             current_order_cash = cash if used_slots >= num_slots else slot_cash
             
             buy_qty = current_order_cash // b_l 
             actual_cost = buy_qty * curr_c
             if buy_qty > 0 and cash >= actual_cost:
-                slot_label = f"예비" if used_slots >= num_slots else used_slots + 1
+                slot_label = "예비" if used_slots >= num_slots else used_slots + 1
                 slot_details.append({
                     "슬롯": slot_label, "날짜": date_idx.strftime('%Y-%m-%d'),
                     "매수가(종가)": round(float(curr_c), 2), "기준가(타점)": round(float(b_l), 2),
@@ -153,8 +152,7 @@ with st.sidebar:
     
     st.divider()
     st.subheader("💰 수기 자금 관리")
-    p_dep = st.number_input("추가 입금/출금액 ($)", value=float(get_setting('pending_dep', 0.0)), 
-                          help="전량 매도 후 현금 상태일 때 주문금액에 적용됩니다.")
+    p_dep = st.number_input("추가 입금/출금액 ($)", value=float(get_setting('pending_dep', 0.0)))
 
     if st.button("💾 설정값 저장 및 강제 새로고침"):
         st.query_params.update({
@@ -176,6 +174,7 @@ with tab1:
         now_kst = datetime.now(KST).strftime('%Y-%m-%d %H:%M:%S')
         today_val = date.today()
         res_live, slots_live, _ = run_simulation(raw_df, init_seed, num_slots, pcr=pcr_val, start_limit_date=op_start, end_limit_date=today_val, pending_dep=p_dep)
+        
         if not res_live.empty:
             valid_df = raw_df[raw_df.index.date < today_val]
             if valid_df.empty: valid_df = raw_df.iloc[:-1]
@@ -188,16 +187,24 @@ with tab1:
                 data_date = valid_df.index[-1].strftime('%Y-%m-%d')
                 cur = res_live.iloc[-1]
                 
+                # [로직 추가] 사이클 시작 기준금액(불변 원금) 산출
+                zero_slots_df = res_live[res_live['Slots'] == 0]
+                base_capital = zero_slots_df.iloc[-1]['Cash'] if not zero_slots_df.empty else init_seed
+                fund_cycle = base_capital + p_dep
+
                 st.subheader(f"📊 {target_ticker} 현재 운용 현황")
                 st.caption(f"🕒 최종 업데이트 (KST): {now_kst} | 📅 가이드 계산 기준일: {data_date}")
-                c1, c2, c3, c4 = st.columns(4)
+                
+                c1, c2, c3, c4, c5 = st.columns(5)
                 c1.metric("총 수익률", f"{(cur['Total']/init_seed-1)*100:+.2f}%")
                 c2.metric("평균 단가", f"${cur['Avg']:.2f}")
                 
-                # 슬롯 표시 로직 (예비 슬롯 포함)
+                # 슬롯 상태 표시
                 slot_display = f"{int(cur['Slots'])} / {num_slots}" if cur['Slots'] <= num_slots else f"{num_slots} + 예비"
                 c3.metric("채워진 슬롯", slot_display)
                 c4.metric("현재 창출 가치", f"${cur['Total']:,.2f}")
+                c5.metric("사이클 기준금액", f"${fund_cycle:,.2f}", help="이번 사이클이 시작될 때 확정된 원금(수익금 재투자 포함)입니다.")
+                
                 st.info(f"🏦 Ivy 비상금: **${cur['Ivy']:,.2f}** | 💸 PCR 인출액: **${cur['Withdrawn']:,.2f}**")
                 
                 if slots_live:
@@ -207,30 +214,30 @@ with tab1:
                 
                 x = np.ceil(((p1_val + p2_val) * 1.01 / 1.99) * 100) / 100
                 mode, color = ("Ivy", "red") if rsi_val > 65 else ("Willow", "orange") if rsi_val > 45 else ("Lily", "blue") if rsi_val > 30 else ("Tulip", "purple")
-                tulip_msg = " (만약 Ivy 비상금으로 BOXX를 매수한 상태라면, BOXX를 현재 가격으로 전량 매도하세요.)" if mode == "Tulip" and cur['Slots'] == 0 else ""
+                tulip_msg = " (Ivy 비상금으로 BOXX를 매수한 상태라면 전량 매도하세요.)" if mode == "Tulip" and cur['Slots'] == 0 else ""
                 st.markdown(f"### 🎯 오늘의 실전 가이드 (현재 모드: :{color}[{mode}]{tulip_msg})")
                 
                 g1, g2 = st.columns(2)
                 with g1:
                     b_p = x - 0.01 if rsi_val > 45 else np.floor((x * 0.975)*100)/100
                     
-                    # [가이드 로직 수정] 예비 슬롯 주문 안내 추가
                     if cur['Slots'] < num_slots:
                         st.error(f"#### {int(cur['Slots'])+1}회차 정규 매수 (LOC)")
                         try:
-                            zero_slots_df = res_live[res_live['Slots'] == 0]
-                            base_capital = zero_slots_df.iloc[-1]['Cash'] if not zero_slots_df.empty else init_seed
-                            fund = base_capital + p_dep
-                            if mode == "Tulip" and cur['Slots'] == 0: fund += cur['Ivy']
-                            order_cash = fund / num_slots
+                            # 튤립 모드 신규 진입 시에만 Ivy 비상금 합산
+                            current_fund = fund_cycle
+                            if mode == "Tulip" and cur['Slots'] == 0: current_fund += cur['Ivy']
+                            
+                            order_cash = current_fund / num_slots
                             st.write(f"**타점:** `${b_p:.2f}` 이하 | **정량:** `{int(order_cash // b_p)} 주`")
+                            st.caption(f"💡 슬롯당 배정금: ${order_cash:,.2f}")
                         except: st.write("⚠️ 계산 오류")
                     elif cur['Slots'] == num_slots:
                         st.warning(f"#### 🔥 예비 슬롯 추가 매수 (LOC)")
-                        # 예비 슬롯은 현재 남은 모든 현금 사용 (Ivy 제외)
+                        # 예비 슬롯은 현재 잔여 현금 전량 (Ivy 제외)
                         order_cash = cur['Cash']
                         st.write(f"**타점:** `${b_p:.2f}` 이하 | **정량:** `{int(order_cash // b_p)} 주`")
-                        st.caption("💡 기존 분할 완료 후 남은 현금을 모두 투입하는 예비 단계입니다.")
+                        st.caption("💡 정규 분할 완료 후 잔여 현금을 전량 투입하는 보너스 단계입니다.")
                     else:
                         st.write("✅ 매수 완료 (최대 슬롯 도달)")
 
@@ -242,7 +249,7 @@ with tab1:
                     else: st.write("보유 없음")
                 st.line_chart(res_live[['Total', 'QQQ']])
 
-# --- 백테스트 및 도움말 (기존 동일) ---
+# --- 백테스트 탭 (원본 유지) ---
 with tab2:
     st.header("🔍 과거 데이터 기반 백테스트")
     col_b1, col_b2, col_b3 = st.columns(3)
@@ -275,8 +282,7 @@ with tab2:
 
 with tab3:
     st.header("📖 사계절 전략 Pro 이용 가이드")
-    st.markdown("""### 🆕 예비 슬롯(+1) 로직 안내
-기존에는 설정한 분할 수가 끝나면 추가 매수를 하지 않았으나, 본 버전은 **'예비 슬롯'** 기능을 지원합니다.
-1. **정규 슬롯 (1~N)**: 설정한 원금을 N등분하여 기계적으로 매수합니다.
-2. **예비 슬롯 (N+1)**: 정규 매수 완료 후에도 가격이 타점 이하일 경우, 계좌에 남은 **모든 현금을 투입**하여 단가를 한 번 더 낮춥니다.
-3. **효과**: 현금 놀리는 구간을 최소화하고, 깊은 하락장에서 더 강력하게 대응합니다.""")
+    st.markdown("""### 🆕 예비 슬롯(+1) 및 사이클 지표 안내
+1. **사이클 기준금액**: 이번 회차 매매가 시작될 때의 확정 시드(원금+이전 수익)입니다. 이 금액을 기준으로 슬롯이 나뉩니다.
+2. **정규 슬롯 (1~N)**: 기준금액을 N등분하여 정량 매수합니다.
+3. **예비 슬롯 (N+1)**: 정규 매수가 끝난 후에도 하락하면, 남은 **자투리 현금 전량**을 투입해 단가를 극도로 낮춥니다.""")
