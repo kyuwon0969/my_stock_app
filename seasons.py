@@ -108,7 +108,6 @@ def run_simulation(df, initial_seed, num_slots, pcr=0.7, start_limit_date=None, 
             if used_slots == 0: 
                 slot_cash = cash / num_slots
             
-            # 정규 슬롯은 slot_cash, 예비 슬롯(used_slots == num_slots)은 남은 cash 전량
             current_order_cash = cash if used_slots >= num_slots else slot_cash
             
             buy_qty = current_order_cash // b_l 
@@ -187,7 +186,6 @@ with tab1:
                 data_date = valid_df.index[-1].strftime('%Y-%m-%d')
                 cur = res_live.iloc[-1]
                 
-                # [로직 추가] 사이클 시작 기준금액(불변 원금) 산출
                 zero_slots_df = res_live[res_live['Slots'] == 0]
                 base_capital = zero_slots_df.iloc[-1]['Cash'] if not zero_slots_df.empty else init_seed
                 fund_cycle = base_capital + p_dep
@@ -199,11 +197,10 @@ with tab1:
                 c1.metric("총 수익률", f"{(cur['Total']/init_seed-1)*100:+.2f}%")
                 c2.metric("평균 단가", f"${cur['Avg']:.2f}")
                 
-                # 슬롯 상태 표시
                 slot_display = f"{int(cur['Slots'])} / {num_slots}" if cur['Slots'] <= num_slots else f"{num_slots} + 예비"
                 c3.metric("채워진 슬롯", slot_display)
                 c4.metric("현재 창출 가치", f"${cur['Total']:,.2f}")
-                c5.metric("사이클 기준금액", f"${fund_cycle:,.2f}", help="이번 사이클이 시작될 때 확정된 원금(수익금 재투자 포함)입니다.")
+                c5.metric("사이클 기준금액", f"${fund_cycle:,.2f}")
                 
                 st.info(f"🏦 Ivy 비상금: **${cur['Ivy']:,.2f}** | 💸 PCR 인출액: **${cur['Withdrawn']:,.2f}**")
                 
@@ -224,22 +221,17 @@ with tab1:
                     if cur['Slots'] < num_slots:
                         st.error(f"#### {int(cur['Slots'])+1}회차 정규 매수 (LOC)")
                         try:
-                            # 튤립 모드 신규 진입 시에만 Ivy 비상금 합산
                             current_fund = fund_cycle
                             if mode == "Tulip" and cur['Slots'] == 0: current_fund += cur['Ivy']
-                            
                             order_cash = current_fund / num_slots
                             st.write(f"**타점:** `${b_p:.2f}` 이하 | **정량:** `{int(order_cash // b_p)} 주`")
-                            st.caption(f"💡 슬롯당 배정금: ${order_cash:,.2f}")
                         except: st.write("⚠️ 계산 오류")
                     elif cur['Slots'] == num_slots:
                         st.warning(f"#### 🔥 예비 슬롯 추가 매수 (LOC)")
-                        # 예비 슬롯은 현재 잔여 현금 전량 (Ivy 제외)
                         order_cash = cur['Cash']
                         st.write(f"**타점:** `${b_p:.2f}` 이하 | **정량:** `{int(order_cash // b_p)} 주`")
-                        st.caption("💡 정규 분할 완료 후 잔여 현금을 전량 투입하는 보너스 단계입니다.")
                     else:
-                        st.write("✅ 매수 완료 (최대 슬롯 도달)")
+                        st.write("✅ 매수 완료")
 
                 with g2:
                     s_p = np.ceil((x * 1.03)*100)/100 if rsi_val > 65 else x
@@ -249,7 +241,6 @@ with tab1:
                     else: st.write("보유 없음")
                 st.line_chart(res_live[['Total', 'QQQ']])
 
-# --- 백테스트 탭 (원본 유지) ---
 with tab2:
     st.header("🔍 과거 데이터 기반 백테스트")
     col_b1, col_b2, col_b3 = st.columns(3)
@@ -282,8 +273,9 @@ with tab2:
 
 with tab3:
     st.header("📖 사계절 전략 Pro 이용 가이드")
-    info_category = st.radio("궁금한 항목을 선택하세요", ["⚡ 사이트 사용법 3줄 요약", "🌿 Seasons 전략이란?", "🎯 실시간 현황 및 가이드 설명", "📊 백테스트 용어 설명", "⚙️ 운용 설정 설명", "📥 LOC 주문 방법 (토스증권)", "💰 수기 자금 관리"], horizontal=True)
+    info_category = st.radio("궁금한 항목을 선택하세요", ["⚡ 사이트 사용법 3줄 요약", "🌿 Seasons 전략이란?", "🎯 실시간 현황 및 가이드 설명", "📊 백테스트 용어 설명", "⚙️ 운용 설정 설명", "🆕 예비 슬롯(+1) 로직 안내", "📥 LOC 주문 방법 (토스증권)", "💰 수기 자금 관리"], horizontal=True)
     st.divider()
+    
     if info_category == "⚡ 사이트 사용법 3줄 요약":
         st.subheader("🚀 핵심 사용법 요약")
         st.markdown("""1. **설정하기**: 왼쪽 사이드바 '운용 설정'에서 분할 수(4 또는 5 추천), 실제 운용 시작일, 투자 원금(달러 기준), PCR(0.7에서 1 사이를 추천)을 설정하고 **'설정값 저장 및 강제 새로고침'** 버튼을 누른다.\n2. **확인하기**: '실시간 현황 & 가이드' 탭에서 **'오늘의 실전 가이드'**에 떠 있는 매수/매도 주문 가격과 수량을 확인한다.\n3. **주문하기**: 사용하는 증권 앱에서 그대로 달러 기준으로 **LOC 주문을 매일같이 건다**(휴장일 제외). (어렵다면 info 탭의 'LOC 주문 가이드' 카테고리 확인)""")
@@ -312,6 +304,12 @@ with tab3:
     elif info_category == "⚙️ 운용 설정 설명":
         st.subheader("전략 운용을 위한 핵심 설정")
         st.markdown("""* **매수 슬롯 분할 수**: 전체 투자금을 몇 번에 걸쳐 나누어 매수할지를 결정합니다.\n    - **특징**: 분할 수를 늘리면 CAGR(연평균 복리수익률)은 소폭 감소하는 대신 MDD(최대 낙폭)도 감소하는 경향이 있습니다. 즉, 더 안정적인 투자가 가능해집니다.\n    - **추천**: 보통 **4 혹은 5**를 추천합니다.\n* **PCR (재투자 비중)**: 매도 후 발생한 수익금 중 얼마만큼을 다시 투자금으로 합칠지 결정합니다.\n    - **특징**: PCR을 낮게 설정할수록(인출을 많이 할수록) CAGR(연평균 복리수익률)은 감소하는 대신 MDD(최대 낙폭)도 감소하는 경향이 있습니다.\n    - **추천**: 자산 성장을 위해 **0.7 이상, 1에 가까운 값**을 추천합니다.""")
+    elif info_category == "🆕 예비 슬롯(+1) 로직 안내":
+        st.subheader("🆕 예비 슬롯(+1) 및 사이클 지표 안내")
+        st.markdown("""1. **사이클 기준금액**: 이번 회차 매매가 시작될 때의 확정 시드(원금+이전 수익)입니다. 이 금액을 기준으로 슬롯이 나뉩니다.
+2. **정규 슬롯 (1~N)**: 기준금액을 N등분하여 정량 매수합니다.
+3. **예비 슬롯 (N+1)**: 정규 매수가 끝난 후에도 하락하면, 남은 **자투리 현금 전량**을 투입해 단가를 극도로 낮춥니다.
+4. **효과**: 현금 놀리는 구간을 최소화하고, 깊은 하락장에서 더 강력하게 대응합니다.""")
     elif info_category == "📥 LOC 주문 방법 (토스증권)":
         st.subheader("토스증권 LOC 주문 단계별 가이드")
         st.write("LOC(Limit On Close) 주문은 장 마감 가격이 내가 정한 가격보다 유리할 때만 체결되는 주문 방식입니다.")
