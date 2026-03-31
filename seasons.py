@@ -104,8 +104,14 @@ def run_simulation(df, initial_seed, num_slots, pcr=0.7, start_limit_date=None, 
             cash += ivy_reserve; ivy_reserve = 0.0
             
         if not sold and used_slots < num_slots and curr_c <= b_l:
-            if used_slots == 0: slot_cash = cash / num_slots
-            buy_qty = slot_cash // b_l 
+            # [백테스트 로직 수정] 마지막 슬롯은 남은 현금 전량 투입
+            if used_slots == 0: 
+                slot_cash = cash / num_slots
+            
+            # 마지막 슬롯(num_slots - 1)인 경우 현재 남은 현금 전체를 사용
+            current_order_cash = cash if used_slots == num_slots - 1 else slot_cash
+            
+            buy_qty = current_order_cash // b_l 
             actual_cost = buy_qty * curr_c
             if buy_qty > 0 and cash >= actual_cost:
                 slot_details.append({
@@ -202,42 +208,44 @@ with tab1:
                 
                 g1, g2 = st.columns(2)
                 with g1:
-                    # --- [수정된 매수 가이드 로직 시작] ---
                     b_p = x - 0.01 if rsi_val > 45 else np.floor((x * 0.975)*100)/100
                     st.error(f"#### {int(cur['Slots'])+1}회차 매수 (LOC)")
                     
                     if cur['Slots'] < num_slots:
                         try:
                             if b_p > 0 and not np.isnan(b_p):
-                                # 1. 마지막 '전량 매도(현금 100%)' 상태였던 시점의 현금 찾기
-                                # 이것이 이번 사이클의 불변하는 '기준 시드(원금+PCR수익)'가 됩니다.
+                                # 1. 사이클 기준 시드 찾기
                                 zero_slots_df = res_live[res_live['Slots'] == 0]
-                                if not zero_slots_df.empty:
-                                    base_capital = zero_slots_df.iloc[-1]['Cash']
-                                else:
-                                    base_capital = init_seed
+                                base_capital = zero_slots_df.iloc[-1]['Cash'] if not zero_slots_df.empty else init_seed
 
-                                # 2. 이번 사이클 총 자금 = 기준 시드 + 수기 입출금액
-                                # 사이클 도중에 주가가 올라도 base_capital은 변하지 않으므로 자금 기준이 고정됩니다.
-                                active_capital = base_capital + p_dep
-                                
-                                # 3. 튤립 모드 보너스 (첫 매수 전일 때만 Ivy 비상금 합산)
+                                # 2. 전체 가용 자금 (기준 시드 + 수기 입금 + 튤립 보너스)
+                                total_cycle_fund = base_capital + p_dep
                                 if mode == "Tulip" and cur['Slots'] == 0:
-                                    active_capital += cur['Ivy']
+                                    total_cycle_fund += cur['Ivy']
+
+                                # [가이드 로직 수정] 마지막 슬롯인지 확인
+                                if cur['Slots'] == num_slots - 1:
+                                    # 마지막 슬롯: 전체 자금에서 이미 매수한 금액(원금)을 뺀 나머지 전부
+                                    spent_capital = cur['Avg'] * cur['Shares']
+                                    order_cash = total_cycle_fund - spent_capital
+                                    is_last = True
+                                else:
+                                    # 평소 슬롯: 전체 자금을 슬롯 수로 나눈 고정 금액
+                                    order_cash = total_cycle_fund / num_slots
+                                    is_last = False
                                 
-                                # 4. 고정된 자금을 바탕으로 슬롯당 투자금 및 수량 계산
-                                fixed_slot_cash = active_capital / num_slots
-                                buy_qty = int(fixed_slot_cash // b_p)
+                                buy_qty = int(order_cash // b_p)
                                 
                                 st.write(f"**타점:** `${b_p:.2f}` 이하 | **정량:** `{buy_qty} 주`")
-                                st.caption(f"💡 사이클 고정 시드: ${active_capital:,.2f} (슬롯당 ${fixed_slot_cash:,.2f})")
+                                if is_last:
+                                    st.warning(f"🔥 **마지막 슬롯 집중 투자 모드** (잔여 현금 싹쓸이 주문)")
+                                st.caption(f"💡 주문 기준 자금: ${order_cash:,.2f} (사이클 총액: ${total_cycle_fund:,.2f})")
                             else:
                                 st.write("⚠️ 데이터 대기 중...")
                         except Exception as e:
                             st.write(f"⚠️ 수량 계산 오류: {e}")
                     else:
                         st.write("✅ 매수 완료")
-                    # --- [수정된 매수 가이드 로직 끝] ---
 
                 with g2:
                     s_p = np.ceil((x * 1.03)*100)/100 if rsi_val > 65 else x
