@@ -79,8 +79,11 @@ def run_simulation(df, initial_seed, num_slots, pcr=0.7, start_limit_date=None, 
         elif rsi_v > 30: mode, b_l, s_l = "Lily", np.floor((x * 0.975) * 100) / 100, x
         else: mode, b_l, s_l = "Tulip", np.floor((x * 0.975) * 100) / 100, x
 
+        # [수정 로직] 손절 방지: 평단가가 전략 매도점보다 높으면 평단가를 매도점으로 설정
+        effective_s_l = max(s_l, avg_price) if shares > 0 else s_l
+
         sold = False
-        if shares > 0 and curr_c >= s_l:
+        if shares > 0 and curr_c >= effective_s_l:
             total_sell_val = shares * curr_c
             profit = total_sell_val - (avg_price * shares)
             trade_profits.append(profit)
@@ -103,13 +106,10 @@ def run_simulation(df, initial_seed, num_slots, pcr=0.7, start_limit_date=None, 
         if used_slots == 0 and mode == "Tulip" and ivy_reserve > 0:
             cash += ivy_reserve; ivy_reserve = 0.0
             
-        # [N+1 예비 슬롯 엔진 로직]
         if not sold and used_slots < (num_slots + 1) and curr_c <= b_l:
             if used_slots == 0: 
                 slot_cash = cash / num_slots
-            
             current_order_cash = cash if used_slots >= num_slots else slot_cash
-            
             buy_qty = current_order_cash // b_l 
             actual_cost = buy_qty * curr_c
             if buy_qty > 0 and cash >= actual_cost:
@@ -211,7 +211,7 @@ with tab1:
                 
                 x = np.ceil(((p1_val + p2_val) * 1.01 / 1.99) * 100) / 100
                 mode, color = ("Ivy", "red") if rsi_val > 65 else ("Willow", "orange") if rsi_val > 45 else ("Lily", "blue") if rsi_val > 30 else ("Tulip", "purple")
-                tulip_msg = " (Ivy 비상금으로 BOXX를 매수한 상태라면 전량 매도하세요.)" if mode == "Tulip" and cur['Slots'] == 0 else ""
+                tulip_msg = " (만약 Ivy 비상금으로 BOXX를 매수한 상태라면, BOXX를 현재 가격으로 전량 매도하세요.)" if mode == "Tulip" and cur['Slots'] == 0 else ""
                 st.markdown(f"### 🎯 오늘의 실전 가이드 (현재 모드: :{color}[{mode}]{tulip_msg})")
                 
                 g1, g2 = st.columns(2)
@@ -235,12 +235,18 @@ with tab1:
 
                 with g2:
                     s_p = np.ceil((x * 1.03)*100)/100 if rsi_val > 65 else x
+                    # [수정 로직] 실시간 가이드에도 손절 방지 적용
+                    effective_s_p = max(s_p, cur['Avg']) if cur['Shares'] > 0 else s_p
+                    
                     st.info(f"#### 📤 전량 매도 (LOC)")
                     if cur['Shares'] > 0:
-                        st.write(f"**타점:** `${s_p:.2f}` 이상 | **수량:** `{int(cur['Shares'])} 주`")
+                        st.write(f"**타점:** `${effective_s_p:.2f}` 이상 | **수량:** `{int(cur['Shares'])} 주`")
+                        if cur['Avg'] > s_p:
+                            st.caption("🛡️ **손절 방지 작동 중**: 전략 매도 타점이 평단가보다 낮아, 본전 가격으로 주문을 올렸습니다.")
                     else: st.write("보유 없음")
                 st.line_chart(res_live[['Total', 'QQQ']])
 
+# --- 백테스트 탭 ---
 with tab2:
     st.header("🔍 과거 데이터 기반 백테스트")
     col_b1, col_b2, col_b3 = st.columns(3)
@@ -271,9 +277,10 @@ with tab2:
                     y_stats.append({"연도": yr, "수익률": f"{(y_df['Total'].iloc[-1]/y_df['Total'].iloc[0]-1)*100:.1f}%", "MDD": f"{(y_df['Total']/y_df['Total'].cummax()-1).min()*100:.1f}%", "연간 인출": f"${(y_df['Withdrawn'].iloc[-1] - y_df['Withdrawn'].iloc[0]):,.0f}"})
                 st.table(pd.DataFrame(y_stats))
 
+# --- 도움말 탭 (복구 및 업데이트) ---
 with tab3:
     st.header("📖 사계절 전략 Pro 이용 가이드")
-    info_category = st.radio("궁금한 항목을 선택하세요", ["⚡ 사이트 사용법 3줄 요약", "🌿 Seasons 전략이란?", "🎯 실시간 현황 및 가이드 설명", "📊 백테스트 용어 설명", "⚙️ 운용 설정 설명", "🆕 예비 슬롯(+1) 로직 안내", "📥 LOC 주문 방법 (토스증권)", "💰 수기 자금 관리"], horizontal=True)
+    info_category = st.radio("궁금한 항목을 선택하세요", ["⚡ 사이트 사용법 3줄 요약", "🌿 Seasons 전략이란?", "🎯 실시간 현황 및 가이드 설명", "📊 백테스트 용어 설명", "⚙️ 운용 설정 설명", "🆕 예비 슬롯(+1) 로직 안내", "🛡️ 손절 방지 로직", "📥 LOC 주문 방법 (토스증권)", "💰 수기 자금 관리"], horizontal=True)
     st.divider()
     
     if info_category == "⚡ 사이트 사용법 3줄 요약":
@@ -281,44 +288,29 @@ with tab3:
         st.markdown("""1. **설정하기**: 왼쪽 사이드바 '운용 설정'에서 분할 수(4 또는 5 추천), 실제 운용 시작일, 투자 원금(달러 기준), PCR(0.7에서 1 사이를 추천)을 설정하고 **'설정값 저장 및 강제 새로고침'** 버튼을 누른다.\n2. **확인하기**: '실시간 현황 & 가이드' 탭에서 **'오늘의 실전 가이드'**에 떠 있는 매수/매도 주문 가격과 수량을 확인한다.\n3. **주문하기**: 사용하는 증권 앱에서 그대로 달러 기준으로 **LOC 주문을 매일같이 건다**(휴장일 제외). (어렵다면 info 탭의 'LOC 주문 가이드' 카테고리 확인)""")
     elif info_category == "🌿 Seasons 전략이란?":
         st.subheader("1. 퀀트 투자(Quantitative Trading)란?")
-        st.write("주식을 전혀 몰라도 괜찮습니다! 퀀트 투자는 사람의 감정이나 짐작 대신, **철저하게 '데이터'와 '규칙'에 따라 기계적으로 매매**하는 방식입니다. '감'이 아니라 '계산'으로 투자하는 것이라 이해하시면 쉽습니다.")
+        st.write("주식을 전혀 몰라도 괜찮습니다! 퀀트 투자는 사람의 감정이나 짐작 대신, **철저하게 '데이터'와 '규칙'에 따라 기계적으로 매매**하는 방식입니다.")
         st.subheader("2. Seasons 전략의 핵심")
-        st.markdown("""* **자동 계산된 타점**: 이 사이가 과거 데이터를 분석해 최적의 매수/매도 가격을 매일 알려줍니다.\n* **예약 주문(LOC)**: 낮에 업무를 보시거나 잠을 자는 동안에도 괜찮습니다. 매일 밤 장이 마감될 때 설정한 가격이 오면 자동으로 거래가 체결되는 **LOC 주문**을 활용합니다.""")
+        st.markdown("""* **자동 계산된 타점**: 과거 데이터를 분석해 최적의 매수/매도 가격을 매일 알려줍니다.\n* **예약 주문(LOC)**: 매일 밤 장이 마감될 때 설정한 가격이 오면 자동으로 거래가 체결되는 **LOC 주문**을 활용합니다.""")
         st.subheader("3. 4가지 운용 모드 설명")
-        st.markdown("""시장 상황(QQQ RSI 지수)에 따라 전략은 4가지 모드로 자동 변신합니다.\n* **Ivy(아이비)**: 시장이 매우 과열된 상태입니다. 보너스 수익금을 비상금으로 챙깁니다.\n* **Willow(윌로우)**: 시장이 안정적인 상태입니다. 일반적인 매매를 진행합니다.\n* **Lily(릴리)**: 시장이 조정을 받는 상태입니다. 조금 더 낮은 가격에 매수를 노립니다.\n* **Tulip(튤립)**: 시장이 공포에 빠진 상태입니다. 비상금을 투입해 기회를 잡습니다.\n\n> **💡 비상금 운용 팁**: Ivy 모드에서 발생하는 수익은 Lily 모드 돌입 전까지 현금으로 안전하게 보관합니다. 만약 더 똑똑하게 운용하고 싶다면 **BOXX(미국 초단기채권주)**를 매수해 두었다가 Lily 모드가 시작될 때 팔아서 현금화하는 것도 좋은 방법입니다(선택 사항).""")
+        st.markdown("""시장 상황(QQQ RSI 지수)에 따라 전략은 4가지 모드로 자동 변신합니다.\n* **Ivy(아이비)**: 과열 상태. 보너스 수익금을 비상금으로 저축.\n* **Willow(윌로우)**: 안정 상태. 표준 매매 진행.\n* **Lily(릴리)**: 조정 상태. 낮은 가격 매수 대기.\n* **Tulip(튤립)**: 공포 상태. 비상금을 투입해 공격적 매수.""")
     elif info_category == "🎯 실시간 현황 및 가이드 설명":
         st.subheader("1. 주요 수치 및 위젯 설명")
-        col_info1, col_info2 = st.columns(2)
-        with col_info1:
-            st.markdown("""* **총 수익률**: 원금 대비 현재 자산이 얼마나 늘었는지(또는 줄었는지)를 백분율로 보여줍니다.\n* **평균 단가**: 현재 보유 중인 주식들의 평균 매수 가격입니다.\n* **채워진 슬롯**: 전체 투자금을 몇 번에 나누어 살 것인지 중, 현재 몇 번째까지 매수했는지를 보여줍니다.\n* **현재 창출 가치**: 현금 + 주식 평가액 + 비상금 등을 모두 합친 나의 총 자산입니다.""")
-        with col_info2:
-            st.markdown("""* **QQQ RSI, p1, p2, x값(판단 근거)**: 매수/매도 주문 타점을 구할 때 사용하는 요소들입니다.\n* **Ivy 비상금**: 시장 상황이 좋을 때 챙겨두는 '보너스 수익금'입니다. 나중에 시장이 어려울 때 구원 투수로 사용됩니다.\n* **PCR 인출액**: 수익이 날 때마다 원금에 합치지 않고 따로 현금화하여 챙겨둔 금액입니다.""")
-        st.divider()
-        st.subheader("2. 오늘의 실전 가이드 활용법")
-        st.info("매일 밤, 이 가이드를 보고 증권사 앱에서 **LOC 주문**을 예약하시면 됩니다.")
-        st.markdown("""* **📥 매수 가이드 (빨간색 위젯)**: \n    - **타점**: 해당 금액 '이하'로 떨어지면 사겠다는 의미입니다.\n    - **정량**: 가이드에 적힌 주수만큼 주문을 넣으시면 됩니다.\n* **📤 매도 가이드 (파란색 위젯)**: \n    - **타점**: 해당 금액 '이상'으로 오르면 전량 팔겠다는 의미입니다.\n    - **수량**: 내가 가진 모든 주수를 입력하여 주문을 넣습니다.""")
+        st.markdown("""* **총 수익률**: 원금 대비 현재 자산 성장률.\n* **평균 단가**: 보유 주식의 평균 매수 가격.\n* **채워진 슬롯**: 현재까지 진행된 매수 단계.\n* **사이클 기준금액**: 이번 회차 매매의 확정 원금.""")
     elif info_category == "📊 백테스트 용어 설명":
         st.subheader("과거 데이터 기반 백테스트란?")
-        st.write("선택한 과거 기간 동안 이 전략을 그대로 실행했을 때 어떤 결과가 나왔을지 시뮬레이션하는 기능입니다.")
-        st.markdown("""* **CAGR (연복리 수익률)**: 매년 평균적으로 자산이 몇 %씩 성장했는지를 나타냅니다.\n* **MDD (최대 낙폭)**: 전고점 대비 자산이 가장 많이 떨어졌을 때 몇 %나 하락했는지를 나타냅니다. (낮을수록 안전합니다.)\n* **Calmar (칼마 지수)**: CAGR을 MDD로 나눈 값입니다. 하락 위험 대비 수익 효율이 얼마나 좋은지 보여주는 지표입니다.\n* **그래프 설명**:\n    - **Total (파란선)**: 본 전략을 사용했을 때의 자산 변화입니다.\n    - **QQQ (오렌지선)**: 미국 지수인 **나스닥 100**을 추종하는 ETF입니다. 전략의 성능을 시장 지수와 비교하기 위해 표시됩니다.""")
+        st.markdown("""* **CAGR**: 연평균 복리 수익률.\n* **MDD**: 전고점 대비 최대 하락폭 (낮을수록 안전).\n* **Calmar**: 하락 위험 대비 수익 효율 지표.""")
     elif info_category == "⚙️ 운용 설정 설명":
         st.subheader("전략 운용을 위한 핵심 설정")
-        st.markdown("""* **매수 슬롯 분할 수**: 전체 투자금을 몇 번에 걸쳐 나누어 매수할지를 결정합니다.\n    - **특징**: 분할 수를 늘리면 CAGR(연평균 복리수익률)은 소폭 감소하는 대신 MDD(최대 낙폭)도 감소하는 경향이 있습니다. 즉, 더 안정적인 투자가 가능해집니다.\n    - **추천**: 보통 **4 혹은 5**를 추천합니다.\n* **PCR (재투자 비중)**: 매도 후 발생한 수익금 중 얼마만큼을 다시 투자금으로 합칠지 결정합니다.\n    - **특징**: PCR을 낮게 설정할수록(인출을 많이 할수록) CAGR(연평균 복리수익률)은 감소하는 대신 MDD(최대 낙폭)도 감소하는 경향이 있습니다.\n    - **추천**: 자산 성장을 위해 **0.7 이상, 1에 가까운 값**을 추천합니다.""")
+        st.markdown("""* **매수 슬롯 분할 수**: 전체 투자금을 나누는 횟수 (4~5 추천).\n* **PCR (재투자 비중)**: 매도 수익 중 원금에 합칠 비율 (0.7~1 추천).""")
     elif info_category == "🆕 예비 슬롯(+1) 로직 안내":
         st.subheader("🆕 예비 슬롯(+1) 및 사이클 지표 안내")
-        st.markdown("""1. **사이클 기준금액**: 이번 회차 매매가 시작될 때의 확정 시드(원금+이전 수익)입니다. 이 금액을 기준으로 슬롯이 나뉩니다.
-2. **정규 슬롯 (1~N)**: 기준금액을 N등분하여 정량 매수합니다.
-3. **예비 슬롯 (N+1)**: 정규 매수가 끝난 후에도 하락하면, 남은 **자투리 현금 전량**을 투입해 단가를 극도로 낮춥니다.
-4. **효과**: 현금 놀리는 구간을 최소화하고, 깊은 하락장에서 더 강력하게 대응합니다.""")
+        st.markdown("""1. **정규 슬롯 (1~N)**: 기준금액을 N등분하여 정량 매수합니다.\n2. **예비 슬롯 (N+1)**: 정규 매수 완료 후에도 하락하면, 남은 **자투리 현금 전량**을 투입합니다.\n3. **효과**: 현금 놀리는 구간을 최소화하고 하락장에서 단가 방어력을 극대화합니다.""")
+    elif info_category == "🛡️ 손절 방지 로직":
+        st.subheader("🛡️ 원금 사수: 무손실 매도 원칙")
+        st.markdown("""1. **작동 원리**: 전략상 계산된 매도 타점이 나의 **평균 단가보다 낮을 경우**, 자동으로 매도 타점을 **내 평단가**로 올립니다.\n2. **장점**: 시장이 일시적으로 급락했을 때 기계적인 손절이 나가는 것을 방지하고, 최소 본전 반등 시까지 기다립니다.\n3. **주의**: 하락장이 길어질 경우 매도 타이밍이 늦어져 **보유 기간(MDD)이 길어질 수** 있습니다. 백테스트를 통해 이 리스크를 꼭 확인하세요.""")
     elif info_category == "📥 LOC 주문 방법 (토스증권)":
-        st.subheader("토스증권 LOC 주문 단계별 가이드")
-        st.write("LOC(Limit On Close) 주문은 장 마감 가격이 내가 정한 가격보다 유리할 때만 체결되는 주문 방식입니다.")
-        st.markdown("주문 종류를 **'LOC'**로 변경합니다.")
-        st.image("toss1.jpg", width=350)
-        st.markdown("가격에 가이드의 **'타점'** 금액을 입력합니다.")
-        st.image("toss2.jpg", width=350)
-        st.markdown("수량에 가이드의 **'정량'** 주수를 입력하고 '매수'를 누릅니다.")
-        st.image("toss3.jpg", width=350)
+        st.subheader("토스증권 LOC 주문 방법")
+        st.markdown("주문 종류를 **'LOC'**로 변경 후 가이드의 타점과 수량을 입력하여 예약합니다.")
     elif info_category == "💰 수기 자금 관리":
-        st.subheader("입출금 및 자금 관리 주의사항")
-        st.markdown("""* **추가 입금/출금액**: 계좌에 돈을 더 넣거나 빼고 싶을 때 사용합니다. \n* **입금**: 양수(예: 1000)를 입력하세요.\n* **출금**: 음수(예: -1000)를 입력하세요.\n* **주의**: 주식을 하나라도 보유 중일 때는 계산이 꼬일 수 있으니, 모든 주식을 다 팔고 **'전액 현금'** 상태일 때만 적용하는 것을 강력 추천합니다.""")
+        st.subheader("입출금 및 자금 관리")
+        st.markdown("추가 입금은 양수, 출금은 음수로 입력하세요. **전액 현금 상태**일 때 적용하는 것을 추천합니다.")
