@@ -103,7 +103,6 @@ def run_simulation(df, initial_seed, num_slots, pcr=0.7, start_limit_date=None, 
         if used_slots == 0 and mode == "Tulip" and ivy_reserve > 0:
             cash += ivy_reserve; ivy_reserve = 0.0
             
-        # [N+1 예비 슬롯 엔진 로직]
         if not sold and used_slots < (num_slots + 1) and curr_c <= b_l:
             if used_slots == 0: 
                 slot_cash = cash / num_slots
@@ -173,7 +172,6 @@ with tab1:
         now_kst = datetime.now(KST).strftime('%Y-%m-%d %H:%M:%S')
         today_val = date.today()
         res_live, slots_live, _ = run_simulation(raw_df, init_seed, num_slots, pcr=pcr_val, start_limit_date=op_start, end_limit_date=today_val, pending_dep=p_dep)
-        
         if not res_live.empty:
             valid_df = raw_df[raw_df.index.date < today_val]
             if valid_df.empty: valid_df = raw_df.iloc[:-1]
@@ -211,13 +209,12 @@ with tab1:
                 
                 x = np.ceil(((p1_val + p2_val) * 1.01 / 1.99) * 100) / 100
                 mode, color = ("Ivy", "red") if rsi_val > 65 else ("Willow", "orange") if rsi_val > 45 else ("Lily", "blue") if rsi_val > 30 else ("Tulip", "purple")
-                tulip_msg = " (Ivy 비상금으로 BOXX를 매수한 상태라면 전량 매도하세요.)" if mode == "Tulip" and cur['Slots'] == 0 else ""
+                tulip_msg = " (만약 Ivy 비상금으로 BOXX를 매수한 상태라면 전량 매도하세요.)" if mode == "Tulip" and cur['Slots'] == 0 else ""
                 st.markdown(f"### 🎯 오늘의 실전 가이드 (현재 모드: :{color}[{mode}]{tulip_msg})")
                 
                 g1, g2 = st.columns(2)
                 with g1:
                     b_p = x - 0.01 if rsi_val > 45 else np.floor((x * 0.975)*100)/100
-                    
                     if cur['Slots'] < num_slots:
                         st.error(f"#### {int(cur['Slots'])+1}회차 정규 매수 (LOC)")
                         try:
@@ -239,7 +236,12 @@ with tab1:
                     if cur['Shares'] > 0:
                         st.write(f"**타점:** `${s_p:.2f}` 이상 | **수량:** `{int(cur['Shares'])} 주`")
                     else: st.write("보유 없음")
-                st.line_chart(res_live[['Total', 'QQQ']])
+                
+                # [실시간 탭 차트 수정] SOXL 주가 추이 추가
+                res_live[target_ticker] = (init_seed / raw_df['close'].loc[res_live.index[0]]) * raw_df['close'].loc[res_live.index]
+                st.line_chart(res_live[['Total', 'QQQ', target_ticker]])
+            else:
+                st.warning("⚠️ 야후 파이낸스에서 주가 정보를 가져오는 데 실패했습니다. 잠시 후 다시 시도해 주세요.")
 
 with tab2:
     st.header("🔍 과거 데이터 기반 백테스트")
@@ -263,7 +265,11 @@ with tab2:
                 m3.metric("CAGR (연복리)", f"{cagr:.2f}%")
                 m4, m5, m6 = st.columns(3)
                 m4.metric("MDD", f"{mdd:.2f}%"); m5.metric("Calmar", f"{cagr/abs(mdd):.2f}"); m6.metric("총 인출 현금", f"${withdrawn:,.0f}")
-                st.line_chart(res_b[['Total', 'QQQ']])
+                
+                # [백테스트 탭 차트 수정] SOXL 주가 추이 추가
+                res_b[target_ticker] = (bt_seed / bt_raw['close'].loc[res_b.index[0]]) * bt_raw['close'].loc[res_b.index]
+                st.line_chart(res_b[['Total', 'QQQ', target_ticker]])
+                
                 res_b['year'] = res_b.index.year
                 y_stats = []
                 for yr in sorted(res_b['year'].unique()):
