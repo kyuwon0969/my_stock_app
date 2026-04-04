@@ -237,7 +237,6 @@ with tab1:
                         st.write(f"**타점:** `${s_p:.2f}` 이상 | **수량:** `{int(cur['Shares'])} 주`")
                     else: st.write("보유 없음")
                 
-                # [실시간 탭 차트 수정] SOXL 주가 추이 추가
                 res_live[target_ticker] = (init_seed / raw_df['close'].loc[res_live.index[0]]) * raw_df['close'].loc[res_live.index]
                 st.line_chart(res_live[['Total', 'QQQ', target_ticker]])
             else:
@@ -258,15 +257,34 @@ with tab2:
                 cagr = ((f_val / bt_seed) ** (365.25 / (res_b.index[-1] - res_b.index[0]).days) - 1) * 100
                 peak = res_b['Total'].cummax()
                 mdd = (res_b['Total'] / peak - 1).min() * 100
+                
+                # [승률 통계 계산 로직]
+                total_sells = len(trades)
+                wins = len([t for t in trades if t > 0])
+                losses = len([t for t in trades if t <= 0])
+                win_rate = (wins / total_sells * 100) if total_sells > 0 else 0
+                
                 st.divider()
+                st.subheader("🏆 백테스트 종합 결과")
                 m1, m2, m3 = st.columns(3)
                 m1.metric("초기 자산", f"${bt_seed:,.0f}")
                 m2.metric("최종 자산", f"${f_val:,.0f}")
                 m3.metric("CAGR (연복리)", f"{cagr:.2f}%")
-                m4, m5, m6 = st.columns(3)
-                m4.metric("MDD", f"{mdd:.2f}%"); m5.metric("Calmar", f"{cagr/abs(mdd):.2f}"); m6.metric("총 인출 현금", f"${withdrawn:,.0f}")
                 
-                # [백테스트 탭 차트 수정] SOXL 주가 추이 추가
+                m4, m5, m6 = st.columns(3)
+                m4.metric("MDD", f"{mdd:.2f}%")
+                m5.metric("Calmar Index", f"{cagr/abs(mdd):.2f}")
+                m6.metric("총 인출 현금", f"${withdrawn:,.0f}")
+                
+                # [승률 통계 위젯 추가]
+                st.write("---")
+                st.markdown("#### 📊 매매 상세 통계")
+                s1, s2, s3, s4 = st.columns(4)
+                s1.metric("총 매도 횟수", f"{total_sells}회")
+                s2.metric("익절 횟수", f"{wins}회", delta_color="normal")
+                s3.metric("손절/본전 횟수", f"{losses}회", delta_color="inverse")
+                s4.metric("승률 (Win Rate)", f"{win_rate:.1f}%")
+                
                 res_b[target_ticker] = (bt_seed / bt_raw['close'].loc[res_b.index[0]]) * bt_raw['close'].loc[res_b.index]
                 st.line_chart(res_b[['Total', 'QQQ', target_ticker]])
                 
@@ -289,9 +307,9 @@ with tab3:
         st.subheader("1. 퀀트 투자(Quantitative Trading)란?")
         st.write("주식을 전혀 몰라도 괜찮습니다! 퀀트 투자는 사람의 감정이나 짐작 대신, **철저하게 '데이터'와 '규칙'에 따라 기계적으로 매매**하는 방식입니다. '감'이 아니라 '계산'으로 투자하는 것이라 이해하시면 쉽습니다.")
         st.subheader("2. Seasons 전략의 핵심")
-        st.markdown("""* **자동 계산된 타점**: 이 사이가 과거 데이터를 분석해 최적의 매수/매도 가격을 매일 알려줍니다.\n* **예약 주문(LOC)**: 낮에 업무를 보시거나 잠을 자는 동안에도 괜찮습니다. 매일 밤 장이 마감될 때 설정한 가격이 오면 자동으로 거래가 체결되는 **LOC 주문**을 활용합니다.""")
+        st.markdown("""* **자동 계산된 타점**: 이 사이트가 과거 데이터를 분석해 최적의 매수/매도 가격을 매일 알려줍니다.\n* **예약 주문(LOC)**: 낮에 업무를 보시거나 잠을 자는 동안에도 괜찮습니다. 매일 밤 장이 마감될 때 설정한 가격이 오면 자동으로 거래가 체결되는 **LOC 주문**을 활용합니다.""")
         st.subheader("3. 4가지 운용 모드 설명")
-        st.markdown("""시장 상황(QQQ RSI 지수)에 따라 전략은 4가지 모드로 자동 변신합니다.\n* **Ivy(아이비)**: 시장이 매우 과열된 상태입니다. 보너스 수익금을 비상금으로 챙깁니다.\n* **Willow(윌로우)**: 시장이 안정적인 상태입니다. 일반적인 매매를 진행합니다.\n* **Lily(릴리)**: 시장이 조정을 받는 상태입니다. 조금 더 낮은 가격에 매수를 노립니다.\n* **Tulip(튤립)**: 시장이 공포에 빠진 상태입니다. 비상금을 투입해 기회를 잡습니다.\n\n> **💡 비상금 운용 팁**: Ivy 모드에서 발생하는 수익은 Lily 모드 돌입 전까지 현금으로 안전하게 보관합니다. 만약 더 똑똑하게 운용하고 싶다면 **BOXX(미국 초단기채권주)**를 매수해 두었다가 Lily 모드가 시작될 때 팔아서 현금화하는 것도 좋은 방법입니다(선택 사항).""")
+        st.markdown("""시장 상황(QQQ RSI 지수)에 따라 전략은 4가지 모드로 자동 변신합니다.\n* **Ivy(아이비)**: 시장이 매우 과열된 상태입니다. 보너스 수익금을 비상금으로 챙깁니다.\n* **Willow(윌로우)**: 시장이 안정적인 상태입니다. 일반적인 매매를 진행합니다.\n* **Lily(릴리)**: 시장이 조정을 받는 상태입니다. 조금 더 낮은 가격에 매수를 노립니다.\n* **Tulip(튤립)**: 시장이 공포에 빠진 상태입니다. 비상금을 투입해 기회를 잡습니다.\n\n> **💡 비상금 운용 팁**: Ivy 모드에서 발생하는 수익은 Tulip 모드 돌입 전까지 현금으로 안전하게 보관합니다. 만약 더 똑똑하게 운용하고 싶다면 **BOXX(미국 초단기채권주)**를 매수해 두었다가 Tulip 모드가 시작될 때 팔아서 현금화하는 것도 좋은 방법입니다(선택 사항).""")
     elif info_category == "🎯 실시간 현황 및 가이드 설명":
         st.subheader("1. 주요 수치 및 위젯 설명")
         col_info1, col_info2 = st.columns(2)
