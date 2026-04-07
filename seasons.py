@@ -247,16 +247,24 @@ with tab2:
             if not res_b.empty:
                 f_val = res_b['Total'].iloc[-1]
                 cagr = ((f_val / bt_seed) ** (365.25 / (res_b.index[-1] - res_b.index[0]).days) - 1) * 100
+                
+                # 기존 MDD (전고점 대비 최대 낙폭)
                 mdd = (res_b['Total'] / res_b['Total'].cummax() - 1).min() * 100
+                
+                # 추가: Max Loss from Principal (원금 대비 최대 낙폭)
+                # 원금 대비 자산이 가장 낮았던 지점을 찾고, 원금보다 높을 경우 0으로 처리
+                max_loss_from_principal = min((res_b['Total'].min() - bt_seed) / bt_seed * 100, 0.0)
+                
                 total_sells = len(trades)
                 win_rate = (len([t for t in trades if t > 0]) / total_sells * 100) if total_sells > 0 else 0
                 
                 st.divider()
                 st.subheader("🏆 백테스트 종합 결과")
-                m1, m2, m3 = st.columns(3)
+                m1, m2, m3, m4 = st.columns(4) # 컬럼을 4개로 확장
                 m1.metric("최종 자산", f"${f_val:,.0f}")
                 m2.metric("CAGR (연복리)", f"{cagr:.2f}%")
-                m3.metric("MDD", f"{mdd:.2f}%")
+                m3.metric("MDD (고점대비)", f"{mdd:.2f}%")
+                m4.metric("원금대비 최대손실", f"{max_loss_from_principal:.2f}%")
                 
                 s1, s2, s3 = st.columns(3)
                 s1.metric("총 매도 횟수", f"{total_sells}회")
